@@ -1,0 +1,25 @@
+
+#include <winver.h>
+1 ICON "../assets/app.ico"
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080404b0"
+    BEGIN
+      VALUE "FileDescription", L"\x8d22\x52a1\x8bb0\x8d26\x8f6f\x4ef6"
+      VALUE "ProductName", L"\x8d22\x52a1\x8bb0\x8d26\x8f6f\x4ef6"
+      VALUE "FileVersion", "1.0.0.0"
+      VALUE "ProductVersion", "1.0.0.0"
+      VALUE "OriginalFilename", "launcher.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x804, 1200
+  END
+END

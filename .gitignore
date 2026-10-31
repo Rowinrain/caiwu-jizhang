@@ -1,0 +1,9 @@
+# 账套数据和备份只在本机，不上传
+data/
+backups/
+# 打包结果和下载的运行环境
+dist/
+tools/cache/
+__pycache__/
+*.pyc
+.DS_Store
