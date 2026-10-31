@@ -245,6 +245,15 @@ def latest_notes(ver):
         return ''
 
 
+def file_sha256(path):
+    """更新包的 sha256，写进 latest.json。软件在线更新时没有它会拒绝安装。"""
+    with open(path, 'rb') as f:
+        sha = hashlib.sha256(f.read()).hexdigest()
+    if len(sha) != 64:
+        raise SystemExit('sha256 计算异常：%s' % path)
+    return sha
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base-url', default='', help='更新包在网上的目录地址，写进 latest.json')
@@ -259,8 +268,7 @@ def main():
     if 'update' in only:
         upd = build_update(ver)
         made.append(upd)
-        with open(upd, 'rb') as f:
-            sha = hashlib.sha256(f.read()).hexdigest()
+        sha = file_sha256(upd)
         manifest = {'version': ver, 'notes': latest_notes(ver), 'sha256': sha,
                     'url': (args.base_url.rstrip('/') + '/' if args.base_url else '') + urllib.parse.quote(os.path.basename(upd))}
         with open(os.path.join(DIST, 'latest.json'), 'w', encoding='utf-8') as f:
@@ -302,8 +310,7 @@ def make_release(ver):
             made.append(os.path.join(out, dst))
     upd = os.path.join(out, 'caiwu-jizhang-update.zip')
     if os.path.exists(upd):
-        with open(upd, 'rb') as f:
-            sha = hashlib.sha256(f.read()).hexdigest()
+        sha = file_sha256(upd)
         with open(os.path.join(out, 'latest.json'), 'w', encoding='utf-8') as f:
             json.dump({'version': ver, 'notes': latest_notes(ver), 'sha256': sha, 'url': 'caiwu-jizhang-update.zip'},
                       f, ensure_ascii=False, indent=2)
