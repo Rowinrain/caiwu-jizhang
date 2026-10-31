@@ -142,3 +142,15 @@ class MidYearStartLedgerTest(LedgerTestCase):
         self.assertEqual(signed(begin), Y(570000))
         self.assertEqual((ytd['debit'], ytd['credit']), (Y(100100), Y(30000)))
         self.assertEqual(signed(ytd), Y(570100))
+
+    def test_pl_ytd_matches_balance_table(self):
+        """损益类：总账、明细账的本年累计含启用前实际发生额，与余额表一致。"""
+        self.set_opening([('cash', Y(80000), Y(80000), 0), ('profit', 0, 0, Y(80000)),
+                          ('rent_short', 0, 0, Y(80000))])
+        self.post('2026-07-10', D('cash', Y(100), cf='CF01'), C('rent_short', Y(100)))
+        bt = {r['code']: r for r in ledger.balance_table(self.conn, 202607, 202607)['rows']}['6001']
+        gl_ytd = [r for r in ledger.general_ledger(self.conn, '6001', 202607, 202607)['rows'] if r['type'] == 'ytd'][0]
+        dl_ytd = [r for r in ledger.detail_ledger(self.conn, '6001', 202607, 202607)['rows'] if r['type'] == 'ytd'][0]
+        self.assertEqual(bt['yc'], Y(80100))
+        self.assertEqual((gl_ytd['debit'], gl_ytd['credit']), (bt['yd'], bt['yc']))
+        self.assertEqual((dl_ytd['debit'], dl_ytd['credit']), (bt['yd'], bt['yc']))

@@ -144,3 +144,18 @@ class OpeningBalanceTest(LedgerTestCase):
         self.assertEqual(ledger.leaf_year_begin_balances(self.conn, 2026)[('1001', 0)], Y(500000))
         self.assertEqual(ledger.leaf_begin_balances(self.conn, 202607)[('1001', 0)], Y(570000))
         self.assertEqual(ledger.leaf_end_balances(self.conn, 202607)[('1001', 0)], Y(570000))
+
+    def test_pl_ytd_includes_pre_start_amounts(self):
+        """损益类的本年累计含启用前实际发生额，和利润表本年累计口径一致。"""
+        from app import reports
+        self.post('2026-07-10', D('cash', Y(1000), cf='CF01'), C('rent_short', Y(1000)))
+        r = rows_by_code(ledger.balance_table(self.conn, 202607, 202607))
+        self.assertEqual(r['6001']['yc'], Y(81000))
+        self.assertEqual(r['6602']['yd'], Y(10000))
+        inc = {x['key']: x['ytd'] for x in reports.income_statement(self.conn, 202607)['rows']}
+        self.assertEqual(inc['revenue'], r['6001']['yc'] - r['6001']['yd'])
+        self.assertEqual(inc['admin'], r['6602']['yd'] - r['6602']['yc'])
+        # 下一年度不再带入启用前累计
+        self.post('2027-01-10', D('cash', Y(10), cf='CF01'), C('rent_short', Y(10)))
+        r27 = rows_by_code(ledger.balance_table(self.conn, 202701, 202701))
+        self.assertEqual(r27['6001']['yc'], Y(10))
