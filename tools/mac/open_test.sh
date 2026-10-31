@@ -22,6 +22,19 @@ for i in $(seq 1 60); do
   [ -n "$S" ] && echo "第 ${i} 次检查：$S"
   case "$S" in *'"mode": "window"'*) OK=1; break ;; esac
 done
+if [ $OK = 1 ]; then
+  echo "---- 软件开着时再双击一次 ----"
+  open "$APP"; echo "open 退出代码：$?"
+  sleep 8
+  curl -s -m 2 http://127.0.0.1:8765/api/desktop/status; echo
+  echo "---- 关掉窗口后再双击 ----"
+  pkill -f -- '--window' ; sleep 4
+  curl -s -m 2 http://127.0.0.1:8765/api/version >/dev/null && echo "后台服务还在运行（不应该）" || echo "后台服务已退出"
+  open "$APP"; echo "open 退出代码：$?"
+  sleep 15
+  S2=$(curl -s -m 2 http://127.0.0.1:8765/api/desktop/status); echo "$S2"
+  case "$S2" in *'"mode": "window"'*) ;; *) echo "再次打开失败"; OK=0 ;; esac
+fi
 echo "---- 进程 ----"; ps aux | grep -i "[p]ython3" || true
 screencapture -x "${RUNNER_TEMP:-/tmp}/mac-open.png" 2>/dev/null || true
 echo "---- 运行日志 ----"; cat "$HOME_DIR/data/运行日志.txt" 2>/dev/null || echo "（没有日志）"
