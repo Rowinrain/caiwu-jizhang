@@ -56,3 +56,25 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python tools/desktop_smoke.py ${{ matrix.kind }}
 
+
+  # Mac 版：像用户双击一样用 open 打开 .app，检查独立窗口（包括“从网上下载”的隔离标记）
+  mac-open:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: ['', quarantine]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 双击打开测试 ${{ matrix.mode }}
+        run: bash tools/mac/open_test.sh ${{ matrix.mode }}
+      - name: 截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-open-${{ matrix.mode || 'plain' }}
+          path: ${{ runner.temp }}/mac-open.png
+          if-no-files-found: ignore

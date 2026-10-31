@@ -160,6 +160,12 @@ class WindowProcess:
         if os.name == 'nt':
             kw['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
         try:
+            # 子进程的出错信息写到主进程的日志里（主进程没有日志文件时就继承它的 stderr）
+            try:
+                sys.stderr.flush()
+                kw['stderr'] = sys.stderr.fileno()
+            except Exception:
+                pass
             self.proc = subprocess.Popen(self.command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          cwd=ROOT, **kw)
         except OSError as e:
