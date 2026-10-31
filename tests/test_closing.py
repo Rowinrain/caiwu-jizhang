@@ -135,7 +135,8 @@ class ClosePeriodTest(LedgerTestCase):
         self.build_basic()
 
     def failed(self, p):
-        return {c['name'] for c in closing.close_checks(self.conn, p) if not c['ok']}
+        """会阻止结账的检查项（“仅提醒”的不算）。"""
+        return {c['name'] for c in closing.close_checks(self.conn, p) if not c['ok'] and not c.get('warn_only')}
 
     def test_checks_block_closing(self):
         self.assertEqual(self.failed(202601), {'凭证全部审核', '结转损益'})

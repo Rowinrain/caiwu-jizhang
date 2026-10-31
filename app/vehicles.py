@@ -191,7 +191,8 @@ def dispose(conn, data):
         lines.append({'summary': s, 'account': cash_acct, 'aux_id': cash_aux, 'debit': price, 'credit': 0,
                       'cf_item': 'CF13'})
     if accum:
-        lines.append({'summary': s, 'account': acct_key(conn, 'vehicle_depr'), 'aux_id': 0, 'debit': accum, 'credit': 0})
+        depr_code = acct_key(conn, 'vehicle_depr')
+        lines.append({'summary': s, 'account': depr_code, 'aux_id': aux_of(depr_code), 'debit': accum, 'credit': 0})
     if gain < 0:
         lines.append({'summary': s + ' 处置损失', 'account': loss_acct, 'aux_id': aux_of(loss_acct), 'debit': -gain, 'credit': 0})
     lines.append({'summary': s, 'account': acct_key(conn, 'vehicle_fa'), 'aux_id': v['aux_id'], 'debit': 0, 'credit': v['original']})

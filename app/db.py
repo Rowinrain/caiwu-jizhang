@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
     number INTEGER NOT NULL,
     date TEXT NOT NULL,
     attachments INTEGER NOT NULL DEFAULT 0,
-    kind TEXT NOT NULL DEFAULT '普通',    -- 普通 / 折旧 / 结转损益 / 年末结转
+    kind TEXT NOT NULL DEFAULT '普通',    -- 普通 / 折旧 / 结转增值税 / 计提附加税 / 结转损益 / 年末结转
     audited INTEGER NOT NULL DEFAULT 0,
     maker TEXT NOT NULL DEFAULT '',
     auditor TEXT NOT NULL DEFAULT '',
@@ -172,6 +172,8 @@ def migrate(conn):
             if name not in have:
                 conn.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table, name, ddl))
     _migrate_profile(conn)
+    _migrate_keymap(conn)
+    _migrate_vehicle_aux(conn)
     old = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if not old or int(old[0]) < SCHEMA_VERSION:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
@@ -272,6 +274,7 @@ def create_company(name, start_year, start_month, copy_from='', standard='enterp
         set_meta(conn, 'start_period', start_year * 100 + start_month)
         set_meta(conn, 'maker', '')
         set_meta(conn, 'created_at', now_str())
+        set_meta(conn, 'fix_vehicle_aux', '1')  # 新账套的科目表已经是新设置，不需要再调整
         if copy_from:
             src = connect(copy_from)
             smeta = get_meta(src)
@@ -375,6 +378,42 @@ def _migrate_profile(conn):
     set_meta(conn, 'features', json.dumps(['vehicles']))
     set_meta(conn, 'cf_suggest', json.dumps({k: list(v) for k, v in presets.CF_SUGGEST.items()}))
     set_meta(conn, 'vehicle_label', '租赁车辆')
+
+
+def _migrate_keymap(conn):
+    """新版本给一级科目增加了关键字（如 1603 固定资产减值准备）：旧账套里如果自己建过同编码、同名称的科目，
+    补上关键字，报表才能取到数。"""
+    prof = company_profile(conn)
+    keymap = dict(prof['keymap'])
+    base = charts.ENTERPRISE_L1 if prof['standard'] == 'enterprise' else charts.SMALL_L1
+    names = {r[0]: r[1] for r in conn.execute('SELECT code, name FROM accounts WHERE length(code) = 4')}
+    changed = False
+    for row in base:
+        code, key, name = row[0], row[1], row[2]
+        if key not in keymap and names.get(code) == name:
+            keymap[key] = code
+            changed = True
+    if changed:
+        set_meta(conn, 'keymap', json.dumps(keymap, ensure_ascii=False))
+
+
+def _migrate_vehicle_aux(conn):
+    """v1.5：有车辆的账套，“累计折旧—车辆”“固定资产清理”改为可按车辆辅助核算（可选）。
+    以前这两个科目没有设辅助核算，录凭证时辅助核算格子不能填。只调整一次，之后用户在科目设置里改了就以用户为准。"""
+    if get_meta(conn).get('fix_vehicle_aux'):
+        return
+    prof = company_profile(conn)
+    if 'vehicles' in prof['features'] and '车辆' in prof['aux_types']:
+        codes = [r[0] for r in conn.execute('SELECT code FROM accounts')]
+        for key in ('vehicle_depr', 'fa_clear'):
+            code = prof['keymap'].get(key)
+            if not code or code not in codes:
+                continue
+            for c in codes:  # 科目本身是末级时改它自己，有下级时改它的各个末级下级
+                if c.startswith(code) and not any(o != c and o.startswith(c) for o in codes):
+                    conn.execute("UPDATE accounts SET aux_type = '车辆', aux_required = 0 WHERE code = ? AND aux_type = ''",
+                                 (c,))
+    set_meta(conn, 'fix_vehicle_aux', '1')
 
 
 # ---------------------------------------------------------------- 备份

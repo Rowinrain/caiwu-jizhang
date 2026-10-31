@@ -255,6 +255,8 @@ App.pages.voucher = async (page, params) => {
   }
 
   renderRows();
+  // 有改动就标记“未保存”，顶栏“全部刷新”时跳过这个标签
+  page.oninput = () => { if (!readOnly) page.dataset.dirty = '1'; };
   if (!readOnly) setTimeout(() => $('[data-f=summary]', body).focus(), 50);
 
   const onKey = e => {

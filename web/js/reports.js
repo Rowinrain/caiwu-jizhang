@@ -20,15 +20,14 @@ App.pages.bs = async (page, params) => {
     const [a, b] = readRange(page);
     data = await api('/api/report/bs?' + qs({ from: a, to: b }));
     pairs = pairBalanceSheet(data.rows);
-    const lineNo = {};
-    data.rows.forEach((r, i) => lineNo[r.key] = i + 1);
+    const lineNo = bsLineNo(data.rows);
     const half = (r, first) => {
       const cls = first ? '' : ' class="bs-right"';
       if (!r) return `<td${cls}></td><td></td><td></td><td></td>`;
       if (r.header) return `<td${cls} colspan="4"><b>${esc(r.name)}</b></td>`;
-      const name = `<td${first ? '' : ' class="bs-right"'} title="${esc(r.formula)}"><span class="${r.total ? '' : 'ind'}">${r.total ? '<b>' + esc(r.name) + '</b>' : esc(r.name)}</span></td>`;
-      const m = v => `<td class="n${r.total ? ' b' : ''}${v < 0 ? ' neg' : ''}">${fmt(v)}</td>`;
-      return `${name}<td class="c muted">${lineNo[r.key]}</td>${m(r.end)}${m(r.begin)}`;
+      const name = `<td${first ? '' : ' class="bs-right"'} title="${esc(r.formula)}"><span class="${r.total ? '' : r.memo ? 'ind2 muted' : 'ind'}">${r.total ? '<b>' + esc(r.name) + '</b>' : esc(r.name)}</span></td>`;
+      const m = v => `<td class="n${r.total ? ' b' : ''}${r.memo ? ' muted' : ''}${v < 0 ? ' neg' : ''}">${fmt(v)}</td>`;
+      return `${name}<td class="c muted">${lineNo[r.key] || ''}</td>${m(r.end)}${m(r.begin)}`;
     };
     const c = data.checks;
     $('#out', page).innerHTML = `
@@ -41,14 +40,13 @@ App.pages.bs = async (page, params) => {
           <th class="bs-right">负债和所有者权益</th><th class="c">行次</th><th class="n">期末余额</th><th class="n">${esc(data.begin_label)}</th></tr></thead>
         <tbody>${pairs.map(([l, r]) => `<tr>${half(l, true)}${half(r, false)}</tr>`).join('')}</tbody>
       </table></div>
-      <p class="hint no-print">本月尚未结转的损益已包含在“未分配利润”中，所以结转前后报表都能平衡。没有对应科目的项目显示为空。</p>`;
+      <p class="hint no-print">本月尚未结转的损益已包含在“未分配利润”中，所以结转前后报表都能平衡。没有对应科目的项目显示为空。${data.rows.some(r => r.memo) ? '“固定资产”按“原价 − 累计折旧 − 减值准备 ± 固定资产清理”的净额填列（“无形资产”同理扣除累计摊销），下面灰色的“其中 / 减”行列出各部分金额，只供核对，不重复计入合计，也不编行次。' : ''}</p>`;
   };
   $('#search', page).onclick = () => load().catch(e => toast(e.message, 'err'));
   bindPE(page, () => {
     if (!data) return;
-    const lineNo = {};
-    data.rows.forEach((r, i) => lineNo[r.key] = i + 1);
-    const cellsOf = r => !r ? ['', '', '', ''] : r.header ? [r.name, '', '', ''] : [r.name, lineNo[r.key], r.end, r.begin];
+    const lineNo = bsLineNo(data.rows);
+    const cellsOf = r => !r ? ['', '', '', ''] : r.header ? [r.name, '', '', ''] : [r.memo ? '　　' + r.name : r.name, lineNo[r.key] || '', r.end, r.begin];
     const rows = pairs.map(([l, r]) => {
       const cells = cellsOf(l).concat(cellsOf(r));
       return (l && l.total) || (r && r.total) || (l && l.header) ? { cells, bold: true } : cells;
@@ -59,6 +57,14 @@ App.pages.bs = async (page, params) => {
   });
   await load();
 };
+
+/** 行次：附注行（如“其中：固定资产原价”“减：累计折旧”）只列示构成，不编行次 */
+function bsLineNo(rows) {
+  const out = {};
+  let n = 0;
+  rows.forEach(r => { if (!r.memo) out[r.key] = ++n; });
+  return out;
+}
 
 /** 资产负债表左右两栏逐行配对：流动部分的合计行对齐，资产总计与负债和所有者权益总计对齐 */
 function pairBalanceSheet(rows) {
