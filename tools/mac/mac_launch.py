@@ -41,4 +41,5 @@ if __name__ == '__main__':
     pylib = os.path.join(RES, 'pylib')
     if os.path.isdir(pylib):
         os.environ['PYTHONPATH'] = pylib
-    os.execv(sys.executable, [sys.executable, os.path.join(HOME, 'start.py')])
+    # --log：输出写进 data/运行日志.txt（双击打开时没有终端，方便排查问题）
+    os.execv(sys.executable, [sys.executable, os.path.join(HOME, 'start.py'), '--log'])
