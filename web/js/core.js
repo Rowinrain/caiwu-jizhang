@@ -131,7 +131,34 @@ function qs(obj) {
   return Object.entries(obj).filter(([k, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');
 }
+/* ================= 独立桌面窗口 =================
+ * 在独立窗口里运行时（app/desktop.py），页面里有 window.pywebview.api：
+ * 下载文件改用“保存”对话框；有没保存的内容时，关窗口前先确认。用浏览器打开时这些都不起作用。 */
+function desktopApi() { return window.pywebview && window.pywebview.api && window.pywebview.api.save_file ? window.pywebview.api : null; }
+async function desktopSave(path, body, fallbackName) {
+  const r = await desktopApi().save_file(path, body === undefined ? null : body, App.cid || '', fallbackName || '下载');
+  if (r && r.error) throw new Error(r.error);
+  if (r && r.saved) toast('已保存到：' + r.saved, 'ok');
+}
+// 页面上的下载链接（如“下载账套数据文件”）
+document.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[href^="/api/"]');
+  if (!a || !desktopApi()) return;
+  e.preventDefault();
+  desktopSave(a.getAttribute('href'), undefined, '下载').catch(err => toast(err.message, 'err'));
+});
+(() => {
+  let last = null;
+  setInterval(() => {
+    const api = desktopApi();
+    if (!api) return;
+    const dirty = !!document.querySelector('[data-dirty="1"]');
+    if (dirty !== last) { last = dirty; api.set_unsaved(dirty); }
+  }, 1000);
+})();
+
 async function apiFile(path, body, fallbackName) {
+  if (desktopApi()) return desktopSave(path, body, fallbackName);
   const res = await api(path, body);
   const blob = await res.blob();
   let name = fallbackName || '下载';
@@ -619,7 +646,7 @@ async function quitApp() {
   if (!await confirmBox('退出软件吗？退出后要再次使用，请重新双击软件图标。', '退出')) return;
   try { await api('/api/shutdown', {}); } catch (e) { /* 已经退出 */ }
   document.body.innerHTML = `<div style="max-width:520px;margin:18vh auto;text-align:center;font-family:var(--font);color:#1c2430">
-    <h2>软件已退出</h2><p style="color:#4a5565;line-height:1.8">现在可以关闭这个浏览器窗口。<br>下次使用时，双击“${APP_NAME}”图标即可。</p></div>`;
+    <h2>软件已退出</h2><p style="color:#4a5565;line-height:1.8">${desktopApi() ? '窗口马上会自动关闭。' : '现在可以关闭这个浏览器窗口。'}<br>下次使用时，双击“${APP_NAME}”图标即可。</p></div>`;
 }
 
 async function render() {

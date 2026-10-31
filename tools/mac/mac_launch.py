@@ -37,4 +37,8 @@ def install():
 if __name__ == '__main__':
     if not os.path.exists(os.path.join(HOME, 'start.py')) or version(SRC) > version(HOME):
         install()
+    # 独立窗口组件（pywebview）放在 .app 里的 pylib 文件夹，两种芯片共用
+    pylib = os.path.join(RES, 'pylib')
+    if os.path.isdir(pylib):
+        os.environ['PYTHONPATH'] = pylib
     os.execv(sys.executable, [sys.executable, os.path.join(HOME, 'start.py')])

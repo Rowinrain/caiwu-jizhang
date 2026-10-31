@@ -582,7 +582,9 @@ App.pages.logs = async (page) => {
 
 /* ================= 软件更新 ================= */
 App.pages.update = async (page) => {
-  const [v, us] = await Promise.all([api('/api/version'), api('/api/update/settings')]);
+  const [v, us, ds] = await Promise.all([api('/api/version'), api('/api/update/settings'), api('/api/desktop/status')]);
+  const modeNow = ds.mode === 'window' ? '现在是<b>独立窗口</b>。'
+    : `现在是<b>浏览器</b>${ds.reason ? '（' + esc(ds.reason) + '）' : ''}。`;
   page.innerHTML = pageHead('软件更新', '更新只替换程序文件，账套数据不受影响') + `
     <div class="card" style="max-width:820px">
       <h2>当前版本：v${esc(v.version)}</h2>
@@ -603,6 +605,13 @@ App.pages.update = async (page) => {
         <button class="btn" id="url-save">保存地址</button><button class="btn primary" id="check">检查更新</button></div>
       <div id="chk-res"></div>
     </div>
+    <div class="card" style="max-width:820px">
+      <h2>打开方式</h2>
+      <p class="hint">${modeNow}独立窗口像普通软件一样单独显示，关掉窗口就退出软件；打不开时会自动改用浏览器。
+        如果独立窗口用起来有问题，可以改回浏览器。改了以后，退出软件再重新打开才生效。</p>
+      <div class="toolbar"><label><input type="radio" name="ui-prefer" value="window" ${ds.prefer !== 'browser' ? 'checked' : ''}> 独立窗口（推荐）</label>
+        <label><input type="radio" name="ui-prefer" value="browser" ${ds.prefer === 'browser' ? 'checked' : ''}> 浏览器</label></div>
+    </div>
     <p class="hint">软件文件夹：${esc(v.root)}<br>数据文件夹：${esc(v.data_dir)}</p>`;
   const done = (el, r) => {
     el.innerHTML = `<div class="notice ok">已从 v${esc(r.old_version)} 更新到 v${esc(r.new_version)}，共替换 ${r.files} 个文件。<br>
@@ -617,6 +626,10 @@ App.pages.update = async (page) => {
     try { done(res, await api('/api/update', { data: await fileToB64(file) })); }
     catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
   };
+  page.querySelectorAll('[name="ui-prefer"]').forEach(r => r.onchange = async () => {
+    try { await api('/api/desktop/settings', { prefer: r.value }); toast('已保存，下次打开软件时生效', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  });
   $('#url-save', page).onclick = async () => {
     try { await api('/api/update/settings', { url: $('#upd-url', page).value }); toast('已保存', 'ok'); } catch (e) { toast(e.message, 'err'); }
   };
