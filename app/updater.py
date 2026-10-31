@@ -144,10 +144,10 @@ def _quote_url(url):
     return urllib.parse.urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
 
 
-def _fetch(url, limit=200 * 1024 * 1024):
+def _fetch(url, limit=200 * 1024 * 1024, timeout=30):
     req = urllib.request.Request(_quote_url(url), headers={'User-Agent': 'CaiwuJizhang/%s' % VERSION})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             data = r.read(limit + 1)
     except Exception as e:
         raise AppError('无法连接更新地址：%s' % e)
@@ -156,31 +156,105 @@ def _fetch(url, limit=200 * 1024 * 1024):
     return data
 
 
-def _fetch_manifest(url):
-    if not url:
-        raise AppError('还没有设置更新地址')
+# 国内网络经常打不开 GitHub。更新地址是 GitHub 上的文件时，直连失败会自动改走下面这些
+# GitHub 加速地址（格式都是“加速地址 + 完整的 GitHub 网址”）。这些是第三方公益服务，
+# 可能随时失效，所以准备了好几个；也可以在 data/settings.json 里用 "update_mirrors" 自己指定。
+MIRRORS = (
+    'https://ghfast.top/',
+    'https://gh-proxy.com/',
+    'https://ghproxy.net/',
+    'https://gh.llkk.cc/',
+)
+GITHUB = 'https://github.com/'
+
+
+def _mirrors():
+    m = _load_settings().get('update_mirrors')
+    if isinstance(m, list) and m:
+        return tuple(x.rstrip('/') + '/' for x in m if isinstance(x, str) and re.match(r'^https?://', x))
+    return MIRRORS
+
+
+def _sources(url):
+    """返回 [(名称, 网址)]：先直连，GitHub 网址再加上各个加速地址。"""
+    url = (url or '').strip()
+    i = url.find(GITHUB)
+    if i < 0:
+        return [('直连', url)]
+    gh = url[i:]  # 已经填了加速地址的，也还原成 GitHub 原网址
+    out = [('直连', gh)] + [(m, m + gh) for m in _mirrors()]
+    if i > 0 and url not in [u for _, u in out]:
+        out.insert(0, ('自定义', url))
+    return out
+
+
+def _parse_manifest(raw):
     try:
-        info = json.loads(_fetch(url, 1024 * 1024).decode('utf-8-sig'))
+        info = json.loads(raw.decode('utf-8-sig'))
         info['version'] = str(info['version'])
-    except AppError:
-        raise
     except Exception:
         raise AppError('更新地址返回的内容格式不正确')
     return info
 
 
-def _summary(info):
+def _fetch_manifest(url, need_confirm=False):
+    """取 latest.json，返回 (内容, 成功的来源列表[(名称, 网址)])。
+
+    直连成功就用直连的。直连失败改走加速地址；need_confirm 为 True（要真正安装）时，
+    至少两个加速地址返回完全一致的内容才算数，防止某一个第三方加速地址被篡改。
+    """
+    if not url:
+        raise AppError('还没有设置更新地址')
+    sources = _sources(url)
+    direct = sources[0]
+    errors = []
+    try:
+        return _parse_manifest(_fetch(direct[1], 1024 * 1024, timeout=10)), [direct]
+    except AppError as e:
+        if len(sources) == 1:
+            raise
+        errors.append(str(e))
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def get(src):
+        try:
+            return src, _parse_manifest(_fetch(src[1], 1024 * 1024, timeout=15))
+        except AppError:
+            return src, None
+
+    with ThreadPoolExecutor(max_workers=len(sources) - 1) as ex:
+        got = [(src, info) for src, info in ex.map(get, sources[1:]) if info is not None]
+    if not got:
+        raise AppError('无法连接更新地址（GitHub 直连和 %d 个国内加速地址都连不上）。'
+                       '请检查网络后重试，或下载更新包后用“方法一”安装。%s'
+                       % (len(sources) - 1, errors[0] if errors else ''))
+    groups = {}
+    for src, info in got:
+        key = json.dumps(info, sort_keys=True, ensure_ascii=False)
+        groups.setdefault(key, (info, []))[1].append(src)
+    info, ok = max(groups.values(), key=lambda g: len(g[1]))
+    if need_confirm and len(ok) < 2:
+        raise AppError('GitHub 连不上，能用的加速地址只有一个（%s），无法交叉确认更新信息的真实性，'
+                       '为安全起见已停止。请稍后重试，或下载更新包后用“方法一”安装' % ok[0][0])
+    return info, ok
+
+
+def _summary(info, srcs=None):
     latest = info['version']
-    return {'current': VERSION, 'latest': latest, 'notes': info.get('notes', ''),
-            'has_update': _vtuple(latest) > _vtuple(VERSION), 'download': info.get('url', '')}
+    r = {'current': VERSION, 'latest': latest, 'notes': info.get('notes', ''),
+         'has_update': _vtuple(latest) > _vtuple(VERSION), 'download': info.get('url', '')}
+    if srcs:
+        r['source'] = srcs[0][0]
+    return r
 
 
 def check_online(url):
-    return _summary(_fetch_manifest(url))
+    return _summary(*_fetch_manifest(url))
 
 
 def update_online(url):
-    manifest = _fetch_manifest(url)  # 只取一次，版本判断和校验用同一份内容
+    manifest, srcs = _fetch_manifest(url, need_confirm=True)  # 只取一次，版本判断和校验用同一份内容
     if not _summary(manifest)['has_update']:
         raise AppError('已经是最新版本（%s）' % VERSION)
     if not manifest.get('url'):
@@ -190,7 +264,24 @@ def update_online(url):
         raise AppError('更新信息里缺少有效的 sha256 校验值，为安全起见已停止更新。'
                        '请联系发布者，或下载更新包后用“离线更新”安装')
     import urllib.parse
-    data = _fetch(urllib.parse.urljoin(url, manifest['url']))  # 下载地址可以写相对于 latest.json 的路径
-    if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), want):
-        raise AppError('下载的更新包校验失败（文件不完整或被修改），请稍后重试')
-    return apply_update(data)
+    # 下载地址可以写相对于 latest.json 的路径；按能连上的来源依次尝试，每个都要通过 sha256 校验
+    # 更新信息已经确认过，安装包有 sha256 把关，所以下载可以再试其余加速地址
+    tried = srcs + [x for x in _sources(url) if x not in srcs]
+    last = None
+    for _, base in tried:
+        i = base.find(GITHUB)
+        if i >= 0:  # 加速地址：先和 GitHub 原网址拼好，再加上同一个加速前缀
+            dl = urllib.parse.urljoin(base[i:], manifest['url'])
+            if dl.startswith(GITHUB):
+                dl = base[:i] + dl
+        else:
+            dl = urllib.parse.urljoin(base, manifest['url'])
+        try:
+            data = _fetch(dl)
+        except AppError as e:
+            last = last or e  # 校验失败的提示更重要，不被后面的连接失败覆盖
+            continue
+        if hmac.compare_digest(hashlib.sha256(data).hexdigest(), want):
+            return apply_update(data)
+        last = AppError('下载的更新包校验失败（文件不完整或被修改），请稍后重试')
+    raise last

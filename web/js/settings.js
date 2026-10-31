@@ -598,7 +598,7 @@ App.pages.update = async (page) => {
     </div>
     <div class="card" style="max-width:820px">
       <h2>方法二：在线检查更新</h2>
-      <p class="hint">如果你把新版本发布在网上（例如 GitHub、Gitee 或自己的网站），在这里填写 latest.json 的地址，以后点“检查更新”就能自动下载安装。发布方法见“开发说明.md”。</p>
+      <p class="hint">如果你把新版本发布在网上（例如 GitHub、Gitee 或自己的网站），在这里填写 latest.json 的地址，以后点“检查更新”就能自动下载安装。发布方法见“开发说明.md”。<br>国内网络连不上 GitHub 时，软件会自动改用国内加速地址下载，并核对多个来源的更新信息和 sha256 校验值。</p>
       <div class="toolbar"><input type="text" id="upd-url" value="${esc(us.url || '')}" placeholder="https://…/latest.json" style="width:460px">
         <button class="btn" id="url-save">保存地址</button><button class="btn primary" id="check">检查更新</button></div>
       <div id="chk-res"></div>
@@ -626,9 +626,10 @@ App.pages.update = async (page) => {
     res.innerHTML = '<div class="notice info">正在检查…</div>';
     try {
       const r = await api('/api/update/check', { url });
-      if (!r.has_update) { res.innerHTML = `<div class="notice ok">已经是最新版本（v${esc(r.current)}）。</div>`; return; }
+      const via = r.source && r.source !== '直连' ? `<div class="hint">（GitHub 直连失败，已通过加速地址 ${esc(r.source)} 获取）</div>` : '';
+      if (!r.has_update) { res.innerHTML = `<div class="notice ok">已经是最新版本（v${esc(r.current)}）。${via}</div>`; return; }
       res.innerHTML = `<div class="notice info">发现新版本 <b>v${esc(r.latest)}</b>（当前 v${esc(r.current)}）。
-        ${r.notes ? `<div style="white-space:pre-wrap;margin-top:6px">${esc(r.notes)}</div>` : ''}</div>
+        ${r.notes ? `<div style="white-space:pre-wrap;margin-top:6px">${esc(r.notes)}</div>` : ''}${via}</div>
         <button class="btn primary" id="do-online">下载并更新</button>`;
       $('#do-online', res).onclick = async () => {
         res.innerHTML = '<div class="notice info">正在下载并更新，请稍候…</div>';
