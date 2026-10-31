@@ -301,3 +301,21 @@ td.b { font-weight: 600; }
   .bs-table td.n, .bs-table th.n { font-size: calc(9.5px * var(--pscale, 1)) !important; padding-left: 2px !important; padding-right: 3px !important; }
   .bs-table td.bs-right, .bs-table th.bs-right { border-left: 2px solid #555 !important; }
 }
+
+/* 软件更新进度 */
+.upd-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0; margin: 4px 0 12px; }
+.upd-steps li { display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.upd-steps .dot { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line-2); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+.upd-steps li.done { color: var(--green); }
+.upd-steps li.done .dot { background: var(--green); border-color: var(--green); color: #fff; }
+.upd-steps li.cur { color: var(--accent-ink); font-weight: 600; }
+.upd-steps li.cur .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+.upd-steps li.fail { color: var(--red); font-weight: 600; }
+.upd-steps li.fail .dot { background: var(--red); border-color: var(--red); color: #fff; }
+.upd-msg { margin-bottom: 6px; }
+.pbar { height: 14px; border-radius: 7px; background: var(--line); overflow: hidden; margin-bottom: 6px; position: relative; }
+.pbar i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.pbar.fail i { background: var(--red); }
+.pbar.busy i { width: 30%; position: absolute; animation: pbar-busy 1.2s ease-in-out infinite; }
+@keyframes pbar-busy { from { left: -30%; } to { left: 100%; } }
+.upd-log { background: var(--sum-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; max-height: 220px; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; margin: 6px 0 0; }
