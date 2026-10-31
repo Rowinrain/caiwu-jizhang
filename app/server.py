@@ -526,14 +526,58 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         self._send(code, json.dumps(obj, ensure_ascii=False))
 
+    # ---------------------------------------------------- 只接受本软件自己页面的请求
+    # 服务虽然只监听 127.0.0.1，但用户在同一台电脑上用浏览器打开的任何网页都能向它发请求。
+    # 下面三项检查用来挡住别的网页跨站调用接口（写数据、关软件、上传更新包）以及 DNS 重绑定。
+
+    def _local_origins(self):
+        port = self.server.server_address[1]
+        hosts = ('127.0.0.1:%d' % port, 'localhost:%d' % port)
+        return hosts, tuple('http://' + h for h in hosts)
+
+    def _forbidden_reason(self, is_api, is_post):
+        """请求可以放行时返回 None，否则返回拒绝原因。"""
+        hosts, origins = self._local_origins()
+        # 1. Host 必须是本机地址，防止 DNS 重绑定（别的域名解析到 127.0.0.1 后读写数据）
+        host = (self.headers.get('Host') or '').strip().lower()
+        if host not in hosts:
+            return 'Host 不正确'
+        if not is_api:
+            return None
+        # 2. 带了 Origin（浏览器跨站请求和所有 POST 都会带）就必须是本软件自己的页面
+        origin = self.headers.get('Origin')
+        if origin is not None and origin.strip().lower().rstrip('/') not in origins:
+            return '来源不正确'
+        # 3. 浏览器标明是从别的网站发来的请求一律拒绝（较新的浏览器才有这个头，没有就跳过）
+        site = (self.headers.get('Sec-Fetch-Site') or '').strip().lower()
+        if site in ('cross-site', 'same-site'):
+            return '来源不正确'
+        # 4. POST 必须是 JSON。网页跨站发 JSON 时浏览器会先做预检，本服务不放行，请求就发不出来
+        if is_post:
+            ctype = (self.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            if ctype != 'application/json':
+                return '请求格式不正确'
+        return None
+
+    def _reject(self, reason):
+        self._json(403, {'error': '拒绝访问：%s。请从软件自己打开的页面操作。' % reason})
+
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
-        if url.path.startswith('/api/'):
+        is_api = url.path.startswith('/api/')
+        reason = self._forbidden_reason(is_api, False)
+        if reason:
+            return self._reject(reason)
+        if is_api:
             return self._api(GET_ROUTES, url.path, urllib.parse.parse_qs(url.query))
         self._static(url.path)
 
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        reason = self._forbidden_reason(True, True)
+        if reason:
+            self.close_connection = True  # 不读请求体，直接断开
+            return self._reject(reason)
         length = int(self.headers.get('Content-Length') or 0)
         raw = self.rfile.read(length) if length else b'{}'
         try:
