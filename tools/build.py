@@ -308,6 +308,11 @@ def make_release(ver):
             json.dump({'version': ver, 'notes': latest_notes(ver), 'sha256': sha, 'url': 'caiwu-jizhang-update.zip'},
                       f, ensure_ascii=False, indent=2)
         made.append(os.path.join(out, 'latest.json'))
+    # Release 页面上的说明文字（不作为附件上传）
+    with open(os.path.join(DIST, 'release-notes.md'), 'w', encoding='utf-8') as f:
+        f.write(latest_notes(ver) + '\n\n**下载**：Windows 10/11 选 caiwu-jizhang-windows10-11.zip，Windows 7 选 '
+                'caiwu-jizhang-windows7.zip，Mac 选 caiwu-jizhang-mac.zip，解压后双击“财务记账软件”即可。\n'
+                '已安装的电脑：在“设置 → 软件更新”里点“检查更新”自动更新；连不上 GitHub 时下载 caiwu-jizhang-update.zip 离线更新。\n')
     return made
 
 

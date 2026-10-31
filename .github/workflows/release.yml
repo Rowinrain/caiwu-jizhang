@@ -1,0 +1,41 @@
+# 自动发布：推送一个版本标签（如 v1.5.0）后，GitHub 会自动打包三个安装包和更新包，并创建 Release。
+# 软件里的“检查更新”读取的就是最新 Release 里的 latest.json。
+name: 发布新版本
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 检查标签和 app/__init__.py 里的版本号一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          V=$(python3 -c "import re;print(re.search(r\"VERSION = '([^']+)'\", open('app/__init__.py', encoding='utf-8').read()).group(1))")
+          if [ "v$V" != "$GITHUB_REF_NAME" ]; then echo "标签 $GITHUB_REF_NAME 和程序版本 v$V 不一致，请先修改 app/__init__.py"; exit 1; fi
+
+      - name: 语法检查
+        run: python3 -m compileall -q app start.py tools/build.py
+
+      - name: 打包
+        run: python3 tools/build.py --release --only update,win10,win7,mac
+
+      - name: 创建 Release 并上传文件
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/release/* \
+            --title "$GITHUB_REF_NAME" --notes-file dist/release-notes.md --latest
