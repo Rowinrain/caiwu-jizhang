@@ -2,6 +2,8 @@
 财务记账软件 —— 启动入口。
 免安装版：双击“财务记账软件.exe”（Windows）或“财务记账软件.app”（Mac）。
 开发时也可以在命令行运行：python3 start.py
+  --browser     不用独立窗口，用浏览器打开（也可以设置环境变量 RENTAL_BROWSER=1）
+  --no-browser  只启动后台服务，不打开界面
 """
 import os
 import sys
@@ -61,6 +63,25 @@ def _alert(msg):
 if __name__ == '__main__':
     if sys.version_info < (3, 8):
         sys.exit('需要 Python 3.8 或更高版本')
+    if '--window' in sys.argv:
+        # 独立窗口子进程（由主进程启动，见 app/desktop.py）。标准输出留给和主进程通信，普通输出写到 stderr / 日志
+        if sys.stderr is not None:
+            sys.stdout = sys.stderr
+        _quiet_output()
+        try:
+            from app.desktop import run_window
+            sys.exit(run_window(sys.argv[sys.argv.index('--window') + 1]))
+        except SystemExit:
+            raise
+        except BaseException as e:
+            import traceback
+            traceback.print_exc()
+            try:
+                sys.__stdout__.write('unavailable %s\n' % e)
+                sys.__stdout__.flush()
+            except Exception:
+                pass
+            sys.exit(3)
     _quiet_output()
     _desktop_shortcut()
     try:

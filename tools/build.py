@@ -8,6 +8,7 @@
 需要的运行环境压缩包会自动从 GitHub 下载到 tools/cache/（只下载一次）：
   - Windows 10/11 和 Mac：python-build-standalone 的 CPython 3.12
   - Windows 7：PythonWin7 项目的 CPython 3.8.20 嵌入版（64 位 + 32 位）
+独立桌面窗口组件（pywebview 及依赖）从 PyPI 下载（固定版本、校验 sha256），只放进 Windows 10/11 版和 Mac 版。
 Windows 启动器 tools/launcher/财务记账软件.exe 已经编译好放在仓库里；修改 launcher.c 后需要按文件头说明重新编译。
 """
 import argparse
@@ -40,6 +41,50 @@ RUNTIMES = {
     'win7_x64': 'https://github.com/adang1345/PythonWin7/releases/download/v3.8.20/python-3.8.20-embed-amd64.zip',
     'win7_x86': 'https://github.com/adang1345/PythonWin7/releases/download/v3.8.20/python-3.8.20-embed-win32.zip',
 }
+
+# 独立桌面窗口组件 pywebview 及其依赖（只放进 Windows 10/11 版和 Mac 版；Windows 7 版用浏览器打开）。
+# 固定版本和 sha256，下载后逐个校验。升级时把新的地址和 sha256 一起换掉。
+PYPI = 'https://files.pythonhosted.org/packages/'
+WINDOW_COMMON = [
+    ('3d/25/9491695c22c4842c5b3903b4dc172e0eecf67a27c0af34a71512c9b76a0a/pywebview-6.2.1-py3-none-any.whl',
+     '9d07275f53894ab4d5e2e0e996227193e7187dec276d9b624dccbce029216b46'),
+    ('83/f6/b55ec74cfe68c6584163faa311503c20b0da4c09883a41e8e00d6726c954/bottle-0.13.4-py2.py3-none-any.whl',
+     '045684fbd2764eac9cdeb824861d1551d113e8b683d8d26e296898d3dd99a12e'),
+    ('49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl',
+     '481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8'),
+    # proxy_tools 只有源码包（只有一个 .py 文件），解压出 proxy_tools/ 文件夹即可
+    ('f2/cf/77d3e19b7fabd03895caca7857ef51e4c409e0ca6b37ee6e9f7daa50b642/proxy_tools-0.1.0.tar.gz',
+     'ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010'),
+]
+WINDOW_PKGS = {
+    'win': WINDOW_COMMON + [
+        ('d8/dc/c96a542079a69d3d091e91808fc8aaf9a0d5e2f8e73a63560e4379134bb6/pythonnet-3.2.1-cp311.cp312.cp313.cp314.cp315-none-any.whl',
+         'dd5668b74b0c903d9a24e1ba86f728fc490f8e919d56b3c24bf06739b9ee2b7f'),
+        ('5e/da/ec1a6e36624000b6df0dd61183c42342ee5814c073315e802cadaad04d2f/clr_loader-0.3.1-py3-none-any.whl',
+         'cbad189de20d202a7d621956b0fc38049e13c9bf7ca2923441eff725cd121aa1'),
+        ('d9/79/615cc094e2fb508cade7de88d3b4f6c4ec2bab695c97bce9153dc65aadf5/cffi-2.1.1-cp312-cp312-win_amd64.whl',
+         'f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a'),
+        ('b6/ae/315bbeee126a769cbde43cf4908acb4b40408d8bf8bbf334dd7368d8dadf/pycparser-3.12-py3-none-any.whl',
+         'a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e'),
+    ],
+    'mac': WINDOW_COMMON + [
+        ('68/ac/783ecf1c5045792fb51ad18e0131ff64e33ed9dee9921766c14e03eb27db/pyobjc_core-13.0-cp312-cp312-macosx_10_13_universal2.whl',
+         '5818e3d8cc2677a1e767968ebfe3bc0cb7f80c1f7c19c653ee25ef1cc1b3e188'),
+        ('ea/44/98d626726809da517c757d77e2888d34eaf758ebad908effb8d0b60c8118/pyobjc_framework_cocoa-13.0-cp312-cp312-macosx_10_13_universal2.whl',
+         'e1618d315939c9fae57cb858d4db496ec61f82495ce6a877398131ee494fc19d'),
+        ('73/f9/be94503cc5475a076b61b65b64ccb030a2b72bf6fddbe68bae1f20d9e624/pyobjc_framework_quartz-13.0-cp312-cp312-macosx_10_13_universal2.whl',
+         '5e1d49f2699d128553a52fad473622ff4fd424d05e879d9585dad0a9f7c3dcfd'),
+        ('e6/26/cab74d983eedde4b07a3f79c442717eaf3045911dbd0a00da26701cdeff0/pyobjc_framework_webkit-13.0-cp312-cp312-macosx_10_13_universal2.whl',
+         '868cbeca83d079af6f049765d018db731d8fb2fb3bbfaf8be7fd6e96e8c6ca1a'),
+        ('e1/79/69acf6f3bbe0cfb26eb5483d9e453e943970c05810886ea3bc1b61d0405e/pyobjc_framework_security-13.0-cp312-cp312-macosx_10_13_universal2.whl',
+         '6693e6e083497c6e51ac4533c137f41712b3751cb3c45c3daf7ecc6a197d437e'),
+        ('73/90/a18455cfe09b8c4f339acf8667aea124b0fdb14094fd0f1b9a3c6ca2bce6/pyobjc_framework_uniformtypeidentifiers-13.0-py2.py3-none-any.whl',
+         '5375270af9980825b3a20267312bbd616e9828c4b7d5ab008c98d9bf6b8a51e3'),
+    ],
+}
+# 窗口组件里用不到的部分（其他系统的界面库、调试符号、测试）
+WINDOW_TRIM_DIRS = {'PyObjCTest', 'android', '__pyinstaller', '__pycache__'}
+WINDOW_TRIM_FILES = {'gtk.py', 'qt.py', 'cef.py', 'pywebview-android.jar'}
 
 # 程序文件（更新包只包含这些）
 DOCS = ['使用说明.md', '开发说明.md', '更新记录.md']
@@ -84,6 +129,56 @@ def fetch(key):
             shutil.copyfileobj(r, f)
         os.replace(path + '.part', path)
     return path
+
+
+def fetch_checked(rel, sha):
+    """下载 PyPI 上的文件到 tools/cache/，并核对 sha256。"""
+    os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, os.path.basename(rel))
+    if not os.path.exists(path):
+        print('下载', PYPI + rel)
+        with urllib.request.urlopen(PYPI + rel, timeout=600) as r, open(path + '.part', 'wb') as f:
+            shutil.copyfileobj(r, f)
+        os.replace(path + '.part', path)
+    with open(path, 'rb') as f:
+        got = hashlib.sha256(f.read()).hexdigest()
+    if got != sha:
+        os.remove(path)
+        raise SystemExit('下载的文件校验不通过（sha256 不一致）：%s' % os.path.basename(rel))
+    return path
+
+
+def install_window_component(kind, dest):
+    """把窗口组件解压到 dest（一个 site-packages 文件夹）。kind：win / mac。"""
+    os.makedirs(dest, exist_ok=True)
+    for rel, sha in WINDOW_PKGS[kind]:
+        path = fetch_checked(rel, sha)
+        if path.endswith('.whl'):
+            with zipfile.ZipFile(path) as z:
+                for n in z.namelist():
+                    parts = n.split('/')
+                    if (n.endswith('/') or '..' in parts or any(p in WINDOW_TRIM_DIRS or p.endswith('.dSYM') for p in parts)
+                            or parts[-1] in WINDOW_TRIM_FILES or parts[0].endswith('.data')
+                            or parts[0].endswith('.dist-info') and parts[-1] == 'RECORD'):
+                        continue
+                    target = os.path.join(dest, *parts)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with z.open(n) as src, open(target, 'wb') as f:
+                        shutil.copyfileobj(src, f)
+        else:  # proxy_tools 源码包
+            with tarfile.open(path) as t:
+                for m in t.getmembers():
+                    parts = m.name.split('/')
+                    if m.isfile() and len(parts) == 3 and parts[1] == 'proxy_tools' and parts[2].endswith('.py'):
+                        target = os.path.join(dest, 'proxy_tools', parts[2])
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        with t.extractfile(m) as src, open(target, 'wb') as f:
+                            shutil.copyfileobj(src, f)
+    # Windows：只留 x64 / x86 / arm64 的 WebView2 加载器；Mac 不需要 Windows 的 DLL
+    if kind == 'mac':
+        shutil.rmtree(os.path.join(dest, 'webview', 'lib'), ignore_errors=True)
+    if not os.path.isfile(os.path.join(dest, 'webview', '__init__.py')):
+        raise SystemExit('窗口组件安装失败')
 
 
 def extract_runtime(key, dest):
@@ -193,6 +288,7 @@ def build_windows(ver, win7=False):
     else:
         d = os.path.join(work, 'runtime')
         extract_runtime('win64', d)
+        install_window_component('win', os.path.join(d, 'Lib', 'site-packages'))
         z.tree(pre + 'runtime/', d)
     z.close()
     shutil.rmtree(work, ignore_errors=True)
@@ -214,6 +310,10 @@ def build_mac(ver):
         d = os.path.join(work, folder)
         extract_runtime(key, d)
         z.tree(app + 'Resources/' + folder + '/', d)
+    # 窗口组件是 universal2（同时支持两种芯片），两个运行环境共用一份，由 mac_launch.py 加进 PYTHONPATH
+    d = os.path.join(work, 'pylib')
+    install_window_component('mac', d)
+    z.tree(app + 'Resources/pylib/', d)
     z.file('使用说明.md', os.path.join(ROOT, '使用说明.md'), 0o644)
     z.close()
     shutil.rmtree(work, ignore_errors=True)

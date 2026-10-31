@@ -28,9 +28,31 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: 语法检查
-        run: python -m compileall -q app start.py tools/build.py tests
+        run: python -m compileall -q app start.py tools/build.py tools/desktop_smoke.py tests
 
       - name: 单元测试
         env:
           PYTHONIOENCODING: utf-8
         run: python -m unittest discover -v
+
+  # 独立桌面窗口：打包后用安装包自带的 Python 真的打开窗口，确认页面正常运行后自动关闭
+  desktop:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, kind: win10 }
+          - { os: macos-latest, kind: mac }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 打开独立窗口自动测试
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tools/desktop_smoke.py ${{ matrix.kind }}
+

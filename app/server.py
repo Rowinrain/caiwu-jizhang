@@ -1,5 +1,5 @@
 """
-本地 Web 服务：只监听本机 127.0.0.1，浏览器打开界面后通过 /api/... 读写数据。
+本地 Web 服务：只监听本机 127.0.0.1，界面（独立窗口或浏览器）通过 /api/... 读写数据。
 """
 import base64
 import json
@@ -9,7 +9,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import db, ledger, vouchers as V, vehicles as VH, closing as C, reports as R, io_utils as IO, updater, VERSION
+from . import db, desktop, ledger, vouchers as V, vehicles as VH, closing as C, reports as R, io_utils as IO, updater, VERSION
 from .db import AppError
 
 WEB_DIR = os.path.join(db.ROOT, 'web')
@@ -697,30 +697,58 @@ def _existing_instance():
     return None
 
 
+def _stop_server():
+    try:
+        os.remove(INSTANCE_FILE)
+    except OSError:
+        pass
+    if _httpd:
+        _httpd.shutdown()
+
+
 @post('/api/shutdown', needs_company=False)
 def api_shutdown(conn, b):
     import threading
-
-    def stop():
-        try:
-            os.remove(INSTANCE_FILE)
-        except OSError:
-            pass
-        if _httpd:
-            _httpd.shutdown()
-    threading.Timer(0.3, stop).start()
+    threading.Timer(0.3, _stop_server).start()
     return {'ok': True}
+
+
+@post('/api/desktop/show', needs_company=False)
+def api_desktop_show(conn, b):
+    """再次双击软件图标时调用：已经有独立窗口就把它调到最前面。"""
+    return {'window': desktop.show_existing()}
+
+
+@get('/api/desktop/status', needs_company=False)
+def api_desktop_status(conn, q):
+    return desktop.status()
+
+
+@post('/api/desktop/settings', needs_company=False)
+def api_desktop_settings(conn, b):
+    desktop.set_prefer(b.get('prefer'))
+    return desktop.status()
+
+
+def _show_existing(url):
+    """让已经在运行的软件把窗口调到前面；它没有独立窗口时返回 False。"""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url + 'api/desktop/show', data=b'{}', headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return bool(json.loads(r.read().decode('utf-8')).get('window'))
+    except Exception:
+        return False
 
 
 def run(port=8765, open_browser=True):
     global _httpd
-    import webbrowser
     existing = _existing_instance()
     if existing:
         # 已经在运行：只打开浏览器，不再启动第二份
         print('软件已经在运行：%s' % existing)
-        if open_browser:
-            webbrowser.open(existing)
+        if open_browser and not _show_existing(existing):
+            desktop.open_browser(existing)
         return
     db.auto_backup_all()
     httpd = None
@@ -742,17 +770,19 @@ def run(port=8765, open_browser=True):
         pass
     print('=' * 56)
     print('  财务记账软件已启动 v%s' % VERSION)
-    print('  请在浏览器中打开：%s' % url)
+    print('  界面地址：%s' % url)
     print('  在软件界面右上角点“退出软件”即可关闭。')
     print('=' * 56)
     if open_browser:
         import threading
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+        # 能用独立窗口就开窗口（关掉窗口 = 退出软件），否则用浏览器
+        threading.Timer(0.3, lambda: desktop.open_ui(url, on_closed=_stop_server)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        desktop.stop()
         try:
             if os.path.exists(INSTANCE_FILE):
                 with open(INSTANCE_FILE, encoding='utf-8') as f:
