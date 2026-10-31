@@ -106,6 +106,26 @@ def api_update(conn, b):
     return updater.apply_update(raw)
 
 
+@post('/api/update/start', needs_company=False)
+def api_update_start(conn, b):
+    """离线更新（后台进行，用 /api/update/progress 看进度）。"""
+    raw = base64.b64decode(b.get('data') or '')
+    if not raw:
+        raise AppError('请选择新版本的压缩包')
+    return updater.start_job('file', raw)
+
+
+@post('/api/update/online/start', needs_company=False)
+def api_update_online_start(conn, b):
+    """在线更新（后台进行，用 /api/update/progress 看进度）。"""
+    return updater.start_job('online', b.get('url') or updater.get_update_url())
+
+
+@get('/api/update/progress', needs_company=False)
+def api_update_progress(conn, q):
+    return updater.job_status()
+
+
 @get('/api/update/settings', needs_company=False)
 def api_update_settings(conn, q):
     return {'url': updater.get_update_url(), 'version': VERSION}

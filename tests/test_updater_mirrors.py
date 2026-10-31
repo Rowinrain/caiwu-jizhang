@@ -29,13 +29,13 @@ class MirrorTest(unittest.TestCase):
 
     def run_with(self, responses, fn, *args):
         """responses: 网址 → 内容（bytes）；没有列出的网址当作连不上。"""
-        def fake(url, limit=0, timeout=30):
+        def fake(url, limit=0, timeout=30, progress=None):
             self.calls.append(url)
             if url in responses:
                 return responses[url]
             raise AppError('无法连接更新地址：timed out')
         with mock.patch.object(updater, '_fetch', fake), \
-                mock.patch.object(updater, 'apply_update', lambda d: {'applied': d}):
+                mock.patch.object(updater, 'apply_update', lambda d, p=None: {'applied': d}):
             return fn(*args)
 
     def test_sources(self):

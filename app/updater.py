@@ -12,6 +12,8 @@ import zipfile
 import hashlib
 import hmac
 import json
+import threading
+import time
 import urllib.request
 
 from . import VERSION, UPDATE_URL
@@ -20,6 +22,103 @@ from .db import AppError, ROOT, BACKUP_DIR, DATA_DIR, list_companies, backup_com
 # 只允许更新这些位置的文件
 ALLOWED_TOP = ('app/', 'web/')
 ALLOWED_FILES = ('start.py', '使用说明.md', '开发说明.md', '更新记录.md')
+
+
+# ---------------------------------------------------------------- 进度
+# 更新在后台线程里进行，界面每隔半秒读取一次进度（/api/update/progress），显示进度条、
+# 当前步骤、正在用哪个下载地址，以及每一步的提示（例如“ghfast.top 连接超时，换下一个”）。
+
+STAGES = {
+    'online': [('manifest', '获取更新信息'), ('download', '下载更新包'), ('verify', '校验 sha256'),
+               ('backup', '备份账套和旧版程序'), ('install', '安装（替换程序文件）'), ('restart', '重新打开软件')],
+    'file': [('check', '检查更新包'), ('backup', '备份账套和旧版程序'),
+             ('install', '安装（替换程序文件）'), ('restart', '重新打开软件')],
+}
+
+
+class Progress:
+    """记录一次更新的进度。不传进度对象时用 Progress()，什么也不显示，照常运行。"""
+
+    def __init__(self, kind='online'):
+        self._lock = threading.Lock()
+        self.d = {'kind': kind, 'state': 'running', 'stages': [{'key': k, 'name': n} for k, n in STAGES[kind]],
+                  'stage': STAGES[kind][0][0], 'message': '', 'source': '', 'done': 0, 'total': 0,
+                  'speed': 0, 'log': [], 'error': '', 'result': None, 'started': time.time()}
+        self._t0 = time.time()
+
+    def stage(self, key, message=''):
+        with self._lock:
+            self.d.update(stage=key, message=message, done=0, total=0, speed=0)
+            self._t0 = time.time()
+
+    def message(self, message, source=None):
+        with self._lock:
+            self.d['message'] = message
+            if source is not None:
+                self.d['source'] = source
+
+    def bytes(self, done, total=None):
+        with self._lock:
+            self.d['done'] = done
+            if total is not None:
+                self.d['total'] = total
+            dt = time.time() - self._t0
+            self.d['speed'] = int(done / dt) if dt > 0.2 else 0
+
+    def log(self, text):
+        with self._lock:
+            self.d['log'].append('%s  %s' % (datetime.datetime.now().strftime('%H:%M:%S'), text))
+            del self.d['log'][:-50]
+
+    def finish(self, result=None, error=''):
+        with self._lock:
+            self.d['state'] = 'error' if error else 'done'
+            self.d['error'] = error
+            self.d['result'] = result
+            if not error:
+                self.d.update(stage='restart', message='更新完成，请点右上角“退出软件”，然后重新打开软件')
+
+    def snapshot(self):
+        with self._lock:
+            d = dict(self.d)
+            d['log'] = list(d['log'])
+            d['elapsed'] = int(time.time() - d['started'])
+            return d
+
+
+_job = None
+_job_lock = threading.Lock()
+
+
+def job_status():
+    j = _job
+    return j.snapshot() if j else {'state': 'idle'}
+
+
+def start_job(kind, arg):
+    """在后台开始更新。kind='online' 时 arg 是更新地址；kind='file' 时 arg 是更新包内容。"""
+    global _job
+    with _job_lock:
+        if _job and _job.d['state'] == 'running':
+            raise AppError('已经有一个更新正在进行，请等它完成')
+        p = Progress(kind)
+        _job = p
+
+    def run():
+        try:
+            r = update_online(arg, p) if kind == 'online' else apply_update(arg, p)
+            p.finish(r)
+        except AppError as e:
+            p.log('失败：%s' % e)
+            p.finish(error=str(e))
+        except Exception as e:  # 意外错误也要在界面上显示出来，不能一直卡在“进行中”
+            import traceback
+            traceback.print_exc()
+            p.log('程序出错：%s' % e)
+            p.finish(error='更新时程序出错：%s。账套数据和旧版程序已在开始安装前备份，可以稍后重试' % e)
+
+    threading.Thread(target=run, daemon=True).start()
+    return p.snapshot()
 
 
 def _find_prefix(names):
@@ -59,7 +158,12 @@ def _backup_current_code():
     return path
 
 
-def apply_update(data):
+def apply_update(data, progress=None):
+    p = progress or Progress('file')
+    if p.d['kind'] == 'file':
+        p.stage('check', '正在检查更新包…')
+    else:
+        p.message('正在检查更新包…')
     try:
         z = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
@@ -81,22 +185,46 @@ def apply_update(data):
             members.append((n, rel))
     if not members:
         raise AppError('压缩包里没有可更新的文件')
+    p.log('更新包检查通过：v%s，共 %d 个程序文件' % (new_version, len(members)))
 
     # 先备份：所有账套 + 旧版程序
-    for c in list_companies():
-        if not c.get('broken'):
+    p.stage('backup', '正在备份账套…')
+    companies = [c for c in list_companies() if not c.get('broken')]
+    for i, c in enumerate(companies):
+        p.message('正在备份账套（%d/%d）：%s' % (i + 1, len(companies), c.get('name') or c['id']))
+        p.bytes(i, len(companies))
+        try:
             backup_company(c['id'], '更新前备份')
-    old_code = _backup_current_code()
+        except AppError as e:
+            raise AppError('备份账套“%s”失败，已停止更新，程序文件没有改动：%s' % (c.get('name') or c['id'], e))
+        except OSError as e:
+            raise AppError('备份账套“%s”失败（%s），已停止更新，程序文件没有改动。'
+                           '请检查硬盘空间是否足够' % (c.get('name') or c['id'], e))
+    p.message('正在备份旧版程序…')
+    try:
+        old_code = _backup_current_code()
+    except OSError as e:
+        raise AppError('备份旧版程序失败（%s），已停止更新，程序文件没有改动。请检查硬盘空间是否足够' % e)
+    p.log('已备份 %d 个账套和旧版程序' % len(companies))
 
-    for n, rel in members:
+    p.stage('install', '正在替换程序文件…')
+    for i, (n, rel) in enumerate(members):
+        p.bytes(i, len(members))
         target = os.path.normpath(os.path.join(ROOT, rel))
         if not target.startswith(ROOT) or target.startswith(DATA_DIR) or target.startswith(BACKUP_DIR):
             continue
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, 'wb') as f:
-            f.write(z.read(n))
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, 'wb') as f:
+                f.write(z.read(n))
+        except OSError as e:
+            raise AppError('替换文件 %s 时出错（%s）。可能是文件被占用或没有写入权限；'
+                           '旧版程序已备份在 %s，可以用它恢复，或关闭软件后重新打开再试'
+                           % (rel, e, os.path.relpath(old_code, ROOT)))
         if rel.endswith('.command'):
             os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    p.bytes(len(members), len(members))
+    p.log('已替换 %d 个文件，从 v%s 更新到 v%s' % (len(members), VERSION, new_version))
     return {'old_version': VERSION, 'new_version': new_version, 'files': len(members),
             'code_backup': os.path.relpath(old_code, ROOT)}
 
@@ -144,16 +272,72 @@ def _quote_url(url):
     return urllib.parse.urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
 
 
-def _fetch(url, limit=200 * 1024 * 1024, timeout=30):
+def _net_error(e):
+    """把网络错误翻译成看得懂的中文，后面括号里保留原始错误，方便排查。"""
+    import socket
+    import ssl
+    import urllib.error
+    import http.client
+    if isinstance(e, urllib.error.HTTPError):
+        msg = {404: '服务器上找不到这个文件（404），可能新版本还在发布中，请过几分钟再试',
+               403: '服务器拒绝访问（403）', 429: '访问太频繁被限制了（429），请稍后再试',
+               }.get(e.code, '服务器出错（%s）' % e.code if e.code >= 500 else '服务器返回错误（%s）' % e.code)
+        return msg
+    reason = getattr(e, 'reason', e)
+    if isinstance(reason, (socket.timeout, TimeoutError)) or 'timed out' in str(reason):
+        msg = '连接超时（网络太慢或这个地址打不开）'
+    elif isinstance(reason, socket.gaierror):
+        msg = '找不到服务器（域名解析失败，可能没联网或这个地址被屏蔽）'
+    elif isinstance(reason, ConnectionRefusedError):
+        msg = '服务器拒绝连接'
+    elif isinstance(reason, (ConnectionResetError, ConnectionAbortedError, http.client.RemoteDisconnected,
+                             http.client.IncompleteRead)):
+        msg = '连接被中断'
+    elif isinstance(reason, (ssl.SSLError, ssl.CertificateError)):
+        msg = '安全证书校验失败（电脑日期时间不对、或网络被拦截时常见）'
+    else:
+        msg = '网络错误'
+    return '%s（%s）' % (msg, e)
+
+
+def _mb(n):
+    return '%.1f MB' % (n / 1048576.0) if n >= 1048576 else '%d KB' % max(1, n // 1024)
+
+
+def _fetch(url, limit=200 * 1024 * 1024, timeout=30, progress=None):
     req = urllib.request.Request(_quote_url(url), headers={'User-Agent': 'CaiwuJizhang/%s' % VERSION})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read(limit + 1)
+        r = urllib.request.urlopen(req, timeout=timeout)
     except Exception as e:
-        raise AppError('无法连接更新地址：%s' % e)
-    if len(data) > limit:
-        raise AppError('下载的文件太大')
-    return data
+        raise AppError('无法连接更新地址：%s' % _net_error(e))
+    with r:
+        try:
+            total = int(r.headers.get('Content-Length') or 0)
+        except ValueError:
+            total = 0
+        if total > limit:
+            raise AppError('下载的文件太大')
+        if progress:
+            progress.bytes(0, total)
+        buf = io.BytesIO()
+        got = 0
+        while True:
+            try:
+                chunk = r.read(64 * 1024)
+            except Exception as e:
+                raise AppError('下载到一半中断了（已下载 %s%s）：%s'
+                               % (_mb(got), ' / 共 %s' % _mb(total) if total else '', _net_error(e)))
+            if not chunk:
+                break
+            got += len(chunk)
+            if got > limit:
+                raise AppError('下载的文件太大')
+            buf.write(chunk)
+            if progress:
+                progress.bytes(got)
+    if total and got < total:
+        raise AppError('下载不完整（只收到 %s，应为 %s），连接可能中途断开了' % (_mb(got), _mb(total)))
+    return buf.getvalue()
 
 
 # 国内网络经常打不开 GitHub。更新地址是 GitHub 上的文件时，直连失败会自动改走下面这些
@@ -197,7 +381,7 @@ def _parse_manifest(raw):
     return info
 
 
-def _fetch_manifest(url, need_confirm=False):
+def _fetch_manifest(url, need_confirm=False, progress=None):
     """取 latest.json，返回 (内容, 成功的来源列表[(名称, 网址)])。
 
     直连成功就用直连的。直连失败改走加速地址；need_confirm 为 True（要真正安装）时，
@@ -205,22 +389,27 @@ def _fetch_manifest(url, need_confirm=False):
     """
     if not url:
         raise AppError('还没有设置更新地址')
+    p = progress or Progress()
     sources = _sources(url)
     direct = sources[0]
     errors = []
+    p.message('正在连接 %s…' % ('GitHub' if len(sources) > 1 else '更新地址'), direct[0])
     try:
         return _parse_manifest(_fetch(direct[1], 1024 * 1024, timeout=10)), [direct]
     except AppError as e:
         if len(sources) == 1:
             raise
         errors.append(str(e))
+        p.log('GitHub 直连失败：%s' % str(e).replace('无法连接更新地址：', ''))
+        p.message('GitHub 连不上，正在同时尝试 %d 个国内加速地址…' % (len(sources) - 1), '国内加速地址')
 
     from concurrent.futures import ThreadPoolExecutor
 
     def get(src):
         try:
             return src, _parse_manifest(_fetch(src[1], 1024 * 1024, timeout=15))
-        except AppError:
+        except AppError as e:
+            p.log('%s：%s' % (_short(src[0]), str(e).replace('无法连接更新地址：', '')))
             return src, None
 
     with ThreadPoolExecutor(max_workers=len(sources) - 1) as ex:
@@ -234,10 +423,16 @@ def _fetch_manifest(url, need_confirm=False):
         key = json.dumps(info, sort_keys=True, ensure_ascii=False)
         groups.setdefault(key, (info, []))[1].append(src)
     info, ok = max(groups.values(), key=lambda g: len(g[1]))
+    p.log('已从加速地址取得更新信息：%s' % '、'.join(_short(x[0]) for x in ok))
     if need_confirm and len(ok) < 2:
         raise AppError('GitHub 连不上，能用的加速地址只有一个（%s），无法交叉确认更新信息的真实性，'
                        '为安全起见已停止。请稍后重试，或下载更新包后用“方法一”安装' % ok[0][0])
     return info, ok
+
+
+def _short(name):
+    """加速地址显示成短名字，例如 https://ghfast.top/ → ghfast.top。"""
+    return re.sub(r'^https?://|/$', '', name)
 
 
 def _summary(info, srcs=None):
@@ -253,8 +448,10 @@ def check_online(url):
     return _summary(*_fetch_manifest(url))
 
 
-def update_online(url):
-    manifest, srcs = _fetch_manifest(url, need_confirm=True)  # 只取一次，版本判断和校验用同一份内容
+def update_online(url, progress=None):
+    p = progress or Progress()
+    p.stage('manifest', '正在获取更新信息…')
+    manifest, srcs = _fetch_manifest(url, need_confirm=True, progress=p)  # 只取一次，版本判断和校验用同一份内容
     if not _summary(manifest)['has_update']:
         raise AppError('已经是最新版本（%s）' % VERSION)
     if not manifest.get('url'):
@@ -266,9 +463,10 @@ def update_online(url):
     import urllib.parse
     # 下载地址可以写相对于 latest.json 的路径；按能连上的来源依次尝试，每个都要通过 sha256 校验
     # 更新信息已经确认过，安装包有 sha256 把关，所以下载可以再试其余加速地址
+    p.log('找到新版本 v%s（当前 v%s）' % (manifest['version'], VERSION))
     tried = srcs + [x for x in _sources(url) if x not in srcs]
     last = None
-    for _, base in tried:
+    for k, (name, base) in enumerate(tried):
         i = base.find(GITHUB)
         if i >= 0:  # 加速地址：先和 GitHub 原网址拼好，再加上同一个加速前缀
             dl = urllib.parse.urljoin(base[i:], manifest['url'])
@@ -276,12 +474,28 @@ def update_online(url):
                 dl = base[:i] + dl
         else:
             dl = urllib.parse.urljoin(base, manifest['url'])
+        if name == '直连':
+            label = 'GitHub' if base.startswith(GITHUB) else urllib.parse.urlsplit(base).netloc
+        else:
+            label = _short(name) if name != '自定义' else urllib.parse.urlsplit(base).netloc
+        p.stage('download', '正在从 %s 下载（第 %d 个下载地址，共 %d 个）' % (label, k + 1, len(tried)))
+        p.message('正在从 %s 下载（第 %d 个下载地址，共 %d 个）' % (label, k + 1, len(tried)), label)
         try:
-            data = _fetch(dl)
+            data = _fetch(dl, progress=p)
         except AppError as e:
+            p.log('%s 下载失败：%s%s' % (label, str(e).replace('无法连接更新地址：', ''),
+                                    '，换下一个地址' if k + 1 < len(tried) else ''))
             last = last or e  # 校验失败的提示更重要，不被后面的连接失败覆盖
             continue
+        p.log('从 %s 下载完成，%s' % (label, _mb(len(data))))
+        p.stage('verify', '正在校验 sha256…')
         if hmac.compare_digest(hashlib.sha256(data).hexdigest(), want):
-            return apply_update(data)
-        last = AppError('下载的更新包校验失败（文件不完整或被修改），请稍后重试')
+            p.log('sha256 校验通过')
+            return apply_update(data, p)
+        p.log('%s 下载的文件 sha256 校验不通过（文件不完整或被修改），已丢弃%s'
+              % (label, '，换下一个地址' if k + 1 < len(tried) else ''))
+        last = AppError('下载的更新包校验失败（文件不完整或被修改），为安全起见没有安装，请稍后重试')
+    if 'sha256' not in str(last) and '校验' not in str(last):
+        last = AppError('所有下载地址（%d 个）都没能下载成功，最后一个错误：%s。请检查网络后重试，'
+                        '或下载更新包后用“方法一”安装' % (len(tried), str(last).replace('无法连接更新地址：', '')))
     raise last
