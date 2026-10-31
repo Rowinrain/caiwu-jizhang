@@ -189,8 +189,8 @@ App.pages.vehicles = async (page) => {
       <div class="stat"><div class="k">月折旧额（参考）</div><div class="v">${fmtN(inUse.filter(v => !v.fully).reduce((s, v) => s + v.monthly, 0))}</div></div>
     </div>
     ${rcOk ? `<div class="notice ok no-print">截至 ${plabel(rc.period)} 末，车辆台账与账面一致（原值 ${fmtN(rc.book_original)}，累计折旧 ${fmtN(rc.book_accum)}）。</div>`
-      : `<div class="notice warn no-print">截至 ${plabel(rc.period)} 末，台账与账面不一致：台账原值 ${fmtN(rc.card_original)} / 账面 ${fmtN(rc.book_original)}；台账累计折旧 ${fmtN(rc.card_accum)} / 账面 ${fmtN(rc.book_accum)}。
-        ${rc.mismatches.length ? `<br>原值不一致的车辆：${rc.mismatches.slice(0, 12).map(m => esc(m.plate)).join('、')}${rc.mismatches.length > 12 ? ' 等 ' + rc.mismatches.length + ' 辆' : ''}` : ''}
+      : `<div class="notice warn no-print">截至当前会计期间 ${plabel(rc.period)} 末，台账与账面不一致：台账原值 ${fmtN(rc.card_original)} / 账面 ${fmtN(rc.book_original)}；台账累计折旧 ${fmtN(rc.card_accum)} / 账面 ${fmtN(rc.book_accum)}。
+        ${rc.mismatches.length ? `<br>原值不一致的车辆：${rc.mismatches.slice(0, 12).map(m => esc(m.plate) + (m.reason ? `（${esc(m.reason)}）` : '')).join('；')}${rc.mismatches.length > 12 ? ' 等 ' + rc.mismatches.length + ' 辆' : ''}` : ''}
         <br>常见原因：新买的车还没录购车凭证、期初余额没有带入、本月折旧还没计提、处置凭证还没保存。</div>`}
     <div class="toolbar"><input type="text" id="q" placeholder="车牌号 / 车型" style="width:160px">
       <select id="st"><option value="在用">在用</option><option value="已处置">已处置</option><option value="">全部</option></select>
@@ -214,7 +214,7 @@ App.pages.vehicles = async (page) => {
     const byId = id => vs.find(v => v.id == id);
     $$('[data-edit]', page).forEach(b => b.onclick = () => vehicleForm(byId(b.dataset.edit)));
     $$('[data-buy]', page).forEach(b => b.onclick = async () => {
-      try { App.draft = await api('/api/vehicle/purchase_draft', { id: +b.dataset.buy }); App.draft.note = '已按 13% 进项税生成购车凭证草稿，请选择供应商（或改为银行付款）后保存。'; go('voucher'); }
+      try { App.draft = await api('/api/vehicle/purchase_draft', { id: +b.dataset.buy }); go('voucher'); }
       catch (e) { toast(e.message, 'err'); }
     });
     $$('[data-dis]', page).forEach(b => b.onclick = () => disposeForm(byId(b.dataset.dis)));
