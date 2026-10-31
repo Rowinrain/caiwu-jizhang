@@ -162,7 +162,8 @@ def leaf_balances(conn, pf, pt, accts=None):
     for o in opening_rows(conn, accts):
         d = get((o['code'], o['aux']))
         d['begin'] += o['at_start']
-        if year == sp // 100 and o['is_bs']:
+        # 启用年度的本年累计包含启用前的累计发生额（损益类也一样，与利润表的本年累计口径一致）
+        if year == sp // 100:
             d['yd'] += o['ytd_debit']
             d['yc'] += o['ytd_credit']
 
@@ -316,14 +317,13 @@ def aux_name_map(conn):
 
 
 def _opening_for(conn, accts, code, aux=None):
-    """科目（含下级）在启用时点的余额，以及启用前本年累计借贷（只有资产负债类科目）。"""
+    """科目（含下级）在启用时点的余额，以及启用前本年累计借贷（损益类为启用前实际发生额）。"""
     at_start = ytd_d = ytd_c = 0
     for o in opening_rows(conn, accts):
         if o['code'].startswith(code) and (aux is None or o['aux'] == aux):
             at_start += o['at_start']
-            if o['is_bs']:
-                ytd_d += o['ytd_debit']
-                ytd_c += o['ytd_credit']
+            ytd_d += o['ytd_debit']
+            ytd_c += o['ytd_credit']
     return at_start, ytd_d, ytd_c
 
 

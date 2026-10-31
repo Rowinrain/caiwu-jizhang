@@ -1,0 +1,36 @@
+# 自动测试：推送到任何分支、提交 Pull Request 时运行核心计算的单元测试。
+# 同时在 Python 3.8（Windows 7 版使用的版本）和较新的 Python 上运行，保证代码兼容 3.8。
+name: 测试
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, python: '3.8' }
+          - { os: ubuntu-latest, python: '3.12' }
+          - { os: windows-latest, python: '3.8' }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 语法检查
+        run: python -m compileall -q app start.py tools/build.py tests
+
+      - name: 单元测试
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -v

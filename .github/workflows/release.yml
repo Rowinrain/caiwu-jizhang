@@ -39,6 +39,10 @@ jobs:
         if: steps.ver.outputs.skip != '1'
         run: python3 -m compileall -q app start.py tools/build.py
 
+      - name: 单元测试
+        if: steps.ver.outputs.skip != '1'
+        run: python3 -m unittest discover
+
       - name: 打包
         if: steps.ver.outputs.skip != '1'
         run: python3 tools/build.py --release --only update,win10,win7,mac
