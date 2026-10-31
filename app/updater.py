@@ -10,6 +10,7 @@ import stat
 import zipfile
 
 import hashlib
+import hmac
 import json
 import urllib.request
 
@@ -155,30 +156,41 @@ def _fetch(url, limit=200 * 1024 * 1024):
     return data
 
 
-def check_online(url):
+def _fetch_manifest(url):
     if not url:
         raise AppError('还没有设置更新地址')
     try:
         info = json.loads(_fetch(url, 1024 * 1024).decode('utf-8-sig'))
-        latest = str(info['version'])
+        info['version'] = str(info['version'])
     except AppError:
         raise
     except Exception:
         raise AppError('更新地址返回的内容格式不正确')
+    return info
+
+
+def _summary(info):
+    latest = info['version']
     return {'current': VERSION, 'latest': latest, 'notes': info.get('notes', ''),
             'has_update': _vtuple(latest) > _vtuple(VERSION), 'download': info.get('url', '')}
 
 
+def check_online(url):
+    return _summary(_fetch_manifest(url))
+
+
 def update_online(url):
-    info = check_online(url)
-    if not info['has_update']:
+    manifest = _fetch_manifest(url)  # 只取一次，版本判断和校验用同一份内容
+    if not _summary(manifest)['has_update']:
         raise AppError('已经是最新版本（%s）' % VERSION)
-    manifest = json.loads(_fetch(url, 1024 * 1024).decode('utf-8-sig'))
     if not manifest.get('url'):
         raise AppError('更新信息里没有下载地址')
+    want = str(manifest.get('sha256') or '').strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{64}', want):
+        raise AppError('更新信息里缺少有效的 sha256 校验值，为安全起见已停止更新。'
+                       '请联系发布者，或下载更新包后用“离线更新”安装')
     import urllib.parse
     data = _fetch(urllib.parse.urljoin(url, manifest['url']))  # 下载地址可以写相对于 latest.json 的路径
-    want = (manifest.get('sha256') or '').lower()
-    if want and hashlib.sha256(data).hexdigest() != want:
+    if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), want):
         raise AppError('下载的更新包校验失败（文件不完整或被修改），请稍后重试')
     return apply_update(data)
