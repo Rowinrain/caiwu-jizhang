@@ -168,7 +168,7 @@ function toast(msg, type = '') {
   el.className = 'toast ' + type;
   el.textContent = msg;
   $('#toast-box').appendChild(el);
-  setTimeout(() => el.remove(), type === 'err' ? 6000 : 2600);
+  setTimeout(() => el.remove(), type === 'err' || type === 'warn' ? 6000 : 2600);
 }
 function modal({ title, body, buttons = [], width }) {
   const mask = document.createElement('div');
@@ -483,7 +483,7 @@ App.go = go;
  * 多窗口：每个功能一个标签页。切换标签时页面不重新加载，查询条件和结果都保留。
  * - 点左侧菜单：已打开的就切换过去，没打开的新开一个；
  * - 带参数的跳转（如从余额表点进明细账）：在对应标签里按新参数重新打开；
- * - 标签上的 ↻ 刷新当前标签，× 关闭标签。
+ * - 标签上的 ↻ 刷新当前标签，× 关闭标签；顶栏“全部刷新”（F9）刷新所有打开的标签。
  */
 App.tabs = [];
 App.activeTab = null;
@@ -545,6 +545,7 @@ function closeTab(t) {
 async function loadIntoTab(t, params) {
   const fn = App.pages[t.name];
   t.params = params;
+  delete t.pane.dataset.dirty;
   t.pane.innerHTML = '<div class="empty">加载中…</div>';
   t.pane.scrollTop = 0;
   try { await fn(t.pane, params); }
@@ -557,6 +558,31 @@ async function reloadTab(t) {
   await loadIntoTab(t, t.params || {});
 }
 App.reloadTab = reloadTab;
+/** 一键刷新：重新读取账套信息，再把所有打开的标签按各自原来的条件重新加载。
+ *  正在录入、还没保存的凭证不刷新，免得辛苦录的内容丢掉。 */
+let reloadingAll = false;
+async function reloadAllTabs() {
+  if (reloadingAll) return;
+  reloadingAll = true;
+  const btn = $('#reload-all');
+  if (btn) btn.disabled = true;
+  try {
+    await refreshMeta();
+    const skipped = [];
+    let n = 0;
+    for (const t of App.tabs.slice()) {
+      if (!App.tabs.includes(t)) continue;
+      if (t.pane.dataset.dirty === '1') { skipped.push(t.title); continue; }
+      await loadIntoTab(t, t.params || {});
+      n++;
+    }
+    renderTabbar();
+    if (skipped.length) toast(`已刷新 ${n} 个标签；“${skipped.join('、')}”有未保存的修改，没有刷新（保存后再点一次即可）`, 'warn');
+    else toast(`已刷新全部 ${n} 个标签`, 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+  finally { reloadingAll = false; const b = $('#reload-all'); if (b) b.disabled = false; }
+}
+App.reloadAllTabs = reloadAllTabs;
 function highlightNav(name) {
   $$('#sidebar .nav-group a').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#/' + name));
 }
@@ -580,11 +606,13 @@ function renderChrome() {
     <span class="topbar-period">当前会计期间：<b>${plabel(m.current_period)}</b></span>
     ${m.closed.length ? `<span class="pill gray">已结账至 ${plabel(m.closed[m.closed.length - 1])}</span>` : ''}
     <span class="topbar-spacer"></span>
+    <button class="btn small" id="reload-all" title="重新读取最新数据，把所有打开的标签都刷新一遍（快捷键 F9）">⟳ 全部刷新</button>
     <a href="#/voucher?new=1" class="btn primary small">＋ 新增凭证</a>
     <button class="btn small" id="switch-company">切换账套</button>
     <button class="btn small" data-quit title="关闭软件后台程序">退出软件</button>`;
   $('#switch-company').onclick = () => { App.cid = null; store('cid', ''); App.meta = null; closeAllTabs(); go('companies'); };
   $('[data-quit]', top).onclick = quitApp;
+  $('#reload-all').onclick = reloadAllTabs;
 }
 
 async function quitApp() {
@@ -634,6 +662,9 @@ App.start = () => {
   App.cid = store('cid') || null;
   api('/api/version').then(v => { App.version = v.version; App.root = v.root; App.dataDir = v.data_dir; renderChrome(); }).catch(() => {});
   window.addEventListener('hashchange', render);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'F9' && App.cid && App.meta && !document.querySelector('.modal-mask')) { e.preventDefault(); reloadAllTabs(); }
+  });
   render();
 };
 

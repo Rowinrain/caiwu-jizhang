@@ -187,6 +187,7 @@ kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--line-2); bo
 .toast { background: #1f2a37; color: #fff; padding: 10px 18px; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.2); max-width: 640px; white-space: pre-wrap; line-height: 1.6; }
 .toast.err { background: var(--red); }
 .toast.ok { background: var(--green); }
+.toast.warn { background: #b7791f; }
 
 /* ---------- 首页与账套 ---------- */
 .stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
@@ -289,6 +290,8 @@ pre.fmt { background: #f6f7f9; border: 1px solid var(--line); border-radius: 5px
 .bs-table col.bs-no { width: 46px; }
 .bs-table td.bs-right, .bs-table th.bs-right { border-left: 2px solid #9aa5b4; }
 .bs-table td span.ind { padding-left: 14px; }
+.bs-table td span.ind2 { padding-left: 30px; font-size: 13px; }
+.bs-table td.n.muted { color: var(--ink-3); font-size: 13px; }
 .bs-table td { white-space: normal; }
 td.b { font-weight: 600; }
 @media print {

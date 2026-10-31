@@ -1,7 +1,10 @@
 """
-期末处理：计提折旧 → 结转损益 →（12 月）年末结转 → 结账检查 → 结账 / 反结账。
+期末处理：计提折旧 → 结转增值税 → 计提税金及附加 → 结转损益 →（12 月）年末结转 → 结账检查 → 结账 / 反结账。
 """
-from .db import AppError, log, now_str, acct_key
+import json
+from decimal import Decimal, ROUND_HALF_UP
+
+from .db import AppError, log, now_str, acct_key, get_meta, set_meta
 from .ledger import (account_map, check_open, closed_periods, current_period, last_day, leaf_end_balances,
                      plabel, start_period, next_period)
 from .vehicles import plan_depreciation
@@ -55,14 +58,174 @@ def run_depreciation(conn, p):
         if not accts[c]['is_leaf']:
             raise AppError('折旧科目 %s 不是末级科目，请检查会计科目设置' % c)
     s = '计提%s车辆折旧（%d 辆）' % (plabel(p), len(plan))
-    vid, number = _insert_voucher(conn, p, '折旧', [
-        {'summary': s, 'account': exp_code, 'debit': total},
-        {'summary': s, 'account': acc_code, 'credit': total},
-    ])
+
+    def side(code, field):
+        # 科目设了“车辆”辅助核算时，每辆车一行，记到对应车辆上；否则一行合计
+        if accts[code]['aux_type'] == '车辆':
+            return [{'summary': '计提%s折旧 %s' % (plabel(p), v['plate']), 'account': code, 'aux_id': v['aux_id'],
+                     field: a} for v, a in plan]
+        return [{'summary': s, 'account': code, field: total}]
+    vid, number = _insert_voucher(conn, p, '折旧', side(exp_code, 'debit') + side(acc_code, 'credit'))
     conn.executemany('INSERT INTO depr_records(period, vehicle_id, amount, voucher_id) VALUES (?,?,?,?)',
                      [(p, v['id'], a, vid) for v, a in plan])
     log(conn, '计提折旧', '%s %d 辆 %.2f 元' % (plabel(p), len(plan), total / 100))
     return {'voucher_id': vid, 'number': number, 'count': len(plan), 'amount': total}
+
+
+# ---------------------------------------------------------------- 结转增值税
+#
+# 一般纳税人月末：“应交税费—应交增值税”各明细（进项税额、销项税额、进项税额转出、已交税金……）合计后，
+# 贷方余额就是本月应交未交的增值税，做“借：应交税费—应交增值税（转出未交增值税），贷：应交税费—未交增值税”，
+# 结转后“应交增值税”余额为零，下月申报缴纳时“借：未交增值税，贷：银行存款”。
+# 借方余额是留抵税额，留在“应交增值税”里下月继续抵扣，不需要结转。
+# 简易计税（如处置旧车 3% 减按 2%）记在“应交税费—简易计税”，不参与这个结转，但计入附加税的计税依据。
+
+VAT_KIND = '结转增值税'
+SURTAX_KIND = '计提附加税'
+
+
+def _sum_lines(conn, p, code, col):
+    return conn.execute('SELECT COALESCE(SUM(%s), 0) FROM lines WHERE period = ? AND account_code = ?' % col,
+                        (p, code)).fetchone()[0]
+
+
+def vat_status(conn, p):
+    """p 期增值税情况（金额单位：分）。
+    payable：应交增值税各明细合计的贷方余额（>0 待结转；<0 为留抵）；
+    transferred：本月已经转出的未交增值税；simple：本月简易计税应纳税额；
+    base：附加税计税依据 = 本月转出未交增值税（含待结转）+ 简易计税。"""
+    p = int(p)
+    km = {k: acct_key(conn, k, False) for k in ('vat', 'vat_transfer', 'vat_unpaid', 'vat_simple')}
+    if not km['vat']:
+        return {'enabled': False, 'payable': 0, 'pending': 0, 'retained': 0, 'transferred': 0, 'simple': 0, 'base': 0}
+    bal = leaf_end_balances(conn, p)
+    payable = -sum(v for (c, a), v in bal.items() if c.startswith(km['vat']))
+    pending = max(payable, 0)
+    transferred = _sum_lines(conn, p, km['vat_transfer'], 'debit - credit') if km['vat_transfer'] else 0
+    simple = _sum_lines(conn, p, km['vat_simple'], 'credit') if km['vat_simple'] else 0
+    return {'enabled': True, 'payable': payable, 'pending': pending, 'retained': max(-payable, 0),
+            'transferred': transferred, 'simple': simple, 'base': max(transferred, 0) + pending + simple,
+            'can_transfer': bool(km['vat_transfer'] and km['vat_unpaid'])}
+
+
+def transfer_vat(conn, p):
+    p = _require_current(conn, p)
+    st = vat_status(conn, p)
+    if not st['enabled']:
+        raise AppError('找不到“应交税费—应交增值税”科目')
+    if st['pending'] <= 0:
+        if st['retained']:
+            raise AppError('本月应交增值税为借方余额 %.2f 元（留抵税额），留到下月继续抵扣，不需要结转'
+                           % (st['retained'] / 100))
+        raise AppError('应交增值税没有余额，不需要结转')
+    out_code, unpaid_code = acct_key(conn, 'vat_transfer'), acct_key(conn, 'vat_unpaid')
+    accts = account_map(conn)
+    for c in (out_code, unpaid_code):
+        if not accts[c]['is_leaf']:
+            raise AppError('科目 %s %s 不是末级科目，请检查会计科目设置' % (c, accts[c]['name']))
+    amt = st['pending']
+    s = '结转%s应交未交增值税' % plabel(p)
+    vid, number = _insert_voucher(conn, p, VAT_KIND, [
+        {'summary': s, 'account': out_code, 'debit': amt},
+        {'summary': s, 'account': unpaid_code, 'credit': amt},
+    ])
+    log(conn, '结转增值税', '%s %.2f 元' % (plabel(p), amt / 100))
+    return {'voucher_id': vid, 'number': number, 'amount': amt}
+
+
+# ---------------------------------------------------------------- 计提税金及附加
+#
+# 以本月实际应缴的增值税为计税依据：城市维护建设税（市区 7%、县城和镇 5%、其他 1%）、
+# 教育费附加 3%、地方教育附加 2%。税率可以在期末处理页面修改（例如享受“六税两费”减半时填一半，
+# 或月销售额不超过 10 万元免征教育费附加、地方教育附加时填 0）。
+# 计提凭证：借：税金及附加—各明细，贷：应交税费—各明细；“税金及附加”月末随“结转损益”转入本年利润。
+
+SURTAX_ITEMS = [  # (代码, 名称, 费用科目关键字, 负债科目关键字, 默认税率%)
+    ('city', '城市维护建设税', 'tx_city', 'city_tax', '7'),
+    ('edu', '教育费附加', 'tx_edu', 'edu', '3'),
+    ('local_edu', '地方教育附加', 'tx_local_edu', 'local_edu', '2'),
+]
+
+
+def surtax_rates(conn):
+    try:
+        saved = json.loads(get_meta(conn).get('surtax_rates') or '{}')
+    except ValueError:
+        saved = {}
+    return {k: str(saved.get(k, d)) for k, _, _, _, d in SURTAX_ITEMS}
+
+
+def _clean_rates(rates):
+    out = {}
+    for k, name, _, _, _ in SURTAX_ITEMS:
+        v = str((rates or {}).get(k, '')).strip().rstrip('%')
+        try:
+            d = Decimal(v)
+        except Exception:
+            raise AppError('%s税率格式不正确' % name)
+        if d < 0 or d > 100:
+            raise AppError('%s税率应在 0~100 之间' % name)
+        out[k] = format(d.normalize(), 'f')
+    return out
+
+
+def save_surtax_rates(conn, rates):
+    r = _clean_rates(rates)
+    set_meta(conn, 'surtax_rates', json.dumps(r))
+    return r
+
+
+def surtax_amount(base, rate):
+    """计税依据（分）× 税率%，四舍五入到分。"""
+    return int((Decimal(base) * Decimal(str(rate)) / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+
+
+def surtax_done(conn, p):
+    return conn.execute('SELECT COUNT(*) FROM vouchers WHERE period = ? AND kind = ?', (p, SURTAX_KIND)).fetchone()[0] > 0
+
+
+def surtax_preview(conn, p, rates=None):
+    p = int(p)
+    rates = _clean_rates(rates) if rates else surtax_rates(conn)
+    vs = vat_status(conn, p)
+    items = []
+    for k, name, exp_key, liab_key, _ in SURTAX_ITEMS:
+        items.append({'key': k, 'name': name, 'rate': rates[k], 'amount': surtax_amount(vs['base'], rates[k]),
+                      'exp': acct_key(conn, exp_key, False), 'liab': acct_key(conn, liab_key, False)})
+    return {'base': vs['base'], 'items': items, 'total': sum(i['amount'] for i in items),
+            'done': surtax_done(conn, p), 'vat_pending': vs['pending'], 'enabled': vs['enabled']}
+
+
+def run_surtax(conn, p, rates=None):
+    p = _require_current(conn, p)
+    if rates:
+        save_surtax_rates(conn, rates)
+    if surtax_done(conn, p):
+        raise AppError('%s 已经计提过税金及附加。如需重新计提，请先删除本月的“计提附加税”凭证。' % plabel(p))
+    pv = surtax_preview(conn, p)
+    if pv['vat_pending']:
+        raise AppError('请先结转本月应交增值税，再计提税金及附加')
+    if pv['base'] <= 0:
+        raise AppError('本月没有应缴增值税，不需要计提城建税和教育费附加')
+    accts = account_map(conn)
+    debits, credits = [], []
+    for it in pv['items']:
+        if not it['amount']:
+            continue
+        if not it['exp'] or not it['liab']:
+            raise AppError('找不到“%s”对应的会计科目（税金及附加 / 应交税费明细），请在“设置 → 会计科目”中检查'
+                           % it['name'])
+        for c in (it['exp'], it['liab']):
+            if not accts[c]['is_leaf']:
+                raise AppError('科目 %s %s 不是末级科目，请检查会计科目设置' % (c, accts[c]['name']))
+        s = '计提%s%s' % (plabel(p), it['name'])
+        debits.append({'summary': s, 'account': it['exp'], 'debit': it['amount']})
+        credits.append({'summary': s, 'account': it['liab'], 'credit': it['amount']})
+    if not debits:
+        raise AppError('按当前税率计算，本月税金及附加为 0，不需要计提')
+    vid, number = _insert_voucher(conn, p, SURTAX_KIND, debits + credits)
+    log(conn, '计提税金及附加', '%s %.2f 元' % (plabel(p), pv['total'] / 100))
+    return {'voucher_id': vid, 'number': number, 'amount': pv['total'], 'base': pv['base']}
 
 
 # ---------------------------------------------------------------- 结转损益
@@ -193,6 +356,15 @@ def close_checks(conn, p):
     if 'vehicles' in _cp(conn)['features'] or need: checks.append({'name': '计提车辆折旧', 'ok': done or need == 0,
                    'msg': '已计提' if done else ('本月没有需要计提的车辆' if need == 0
                                                else '本月应计提折旧 %.2f 元，尚未计提' % (need / 100))})
+    vs = vat_status(conn, p)
+    if vs['enabled'] and (vs['pending'] or vs['base']):
+        checks.append({'name': '结转增值税', 'ok': not vs['pending'], 'warn_only': True,
+                       'msg': ('本月应交未交增值税已结转' if not vs['pending'] else
+                               '应交增值税有贷方余额 %.2f 元，尚未结转到“未交增值税”（仅提醒）' % (vs['pending'] / 100))})
+        done = surtax_done(conn, p)
+        checks.append({'name': '计提税金及附加', 'ok': done, 'warn_only': True,
+                       'msg': '已计提' if done else '本月应缴增值税 %.2f 元，尚未计提城建税和教育费附加（仅提醒）'
+                       % (vs['base'] / 100)})
     res = pl_residual(conn, p)
     checks.append({'name': '结转损益', 'ok': not res,
                    'msg': '损益类科目余额已全部结转' if not res else '还有 %d 个损益科目有余额，请执行“结转损益”' % len(res)})
@@ -234,6 +406,8 @@ def closing_status(conn, p=None):
         'last_closed': closed[-1] if closed else None,
         'start_period': start_period(conn),
         'depreciation': depreciation_preview(conn, p),
+        'vat': vat_status(conn, p),
+        'surtax': surtax_preview(conn, p),
         'pl_residual_count': len(pl_residual(conn, p)),
         'carry_preview': carry_preview(conn, p),
         'year_end_needed': p % 100 == 12 and bool(year_end_residual(conn, p)),

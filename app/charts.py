@@ -38,6 +38,7 @@ ENTERPRISE_L1 = [
     ('1531', 'lt_rec', '长期应收款', '资产', '借', '', 0, 0),
     ('1601', 'fa', '固定资产', '资产', '借', '', 0, 0),
     ('1602', 'accum_depr', '累计折旧', '资产', '贷', '', 0, 0),
+    ('1603', 'fa_impair', '固定资产减值准备', '资产', '贷', '', 0, 0),
     ('1604', 'cip', '在建工程', '资产', '借', '', 0, 0),
     ('1606', 'fa_clear', '固定资产清理', '资产', '借', '', 0, 0),
     ('1701', 'intangible', '无形资产', '资产', '借', '', 0, 0),
@@ -327,14 +328,18 @@ def buy(name, summary, cost_key, rate, credit_key='bank'):
 
 
 def vehicle_fa(label):
-    """有营运车辆的行业：固定资产、累计折旧的第一个明细是车辆，按车辆辅助核算。"""
+    """有营运车辆的行业：固定资产、累计折旧的第一个明细是车辆，按车辆辅助核算
+    （固定资产必选车辆；累计折旧可选车辆，系统计提折旧时自动按车辆分别记账）。"""
     return {
         'fa': [S('01', '运输设备—' + label, '车辆', 1, 'vehicle_fa'), S('02', '房屋及建筑物'),
                S('03', '办公及电子设备', key='fa_office'), S('04', '其他设备')],
-        'accum_depr': [S('01', label, key='vehicle_depr'), S('02', '房屋及建筑物'),
+        'accum_depr': [S('01', label, '车辆', 0, 'vehicle_depr'), S('02', '房屋及建筑物'),
                        S('03', '办公及电子设备', key='depr_office'), S('04', '其他设备')],
     }
 
+
+# 有车辆的行业：资产处置损益、固定资产清理也可以按车辆记账
+VEHICLE_AUX_OVERRIDES = {'disposal': ('车辆', 0), 'fa_clear': ('车辆', 0)}
 
 # ---------------------------------------------------------------- 行业
 INDUSTRIES = {}
@@ -376,7 +381,7 @@ industry(
      buy('购入车辆（13%专票，挂应付）', '购入车辆', 'vehicle_fa', 13, 'ap'),
      buy('支付平台佣金（6%专票）', '支付平台佣金', 'commission', 6),
      ('收到保险理赔款', [('收到保险公司理赔款', 'bank', '借', 'T'), ('收到保险公司理赔款', 'ins_claim', '贷', 'T')])],
-    features=['vehicles'], wage_cost=['cost_wage'], aux_overrides={'disposal': ('车辆', 0)}, vehicle_label='租赁车辆')
+    features=['vehicles'], wage_cost=['cost_wage'], aux_overrides=VEHICLE_AUX_OVERRIDES, vehicle_label='租赁车辆')
 
 # 2. 旅客运输
 industry(
@@ -402,7 +407,7 @@ industry(
      buy('支付车辆保险费（6%专票）', '支付车辆保险费', 'veh_ins', 6),
      buy('支付车站服务费（6%专票）', '支付车站服务费', 'station_fee', 6),
      buy('购入车辆（13%专票，挂应付）', '购入车辆', 'vehicle_fa', 13, 'ap')],
-    features=['vehicles'], aux_types=['线路'], wage_cost=['cost_wage'], aux_overrides={'disposal': ('车辆', 0)},
+    features=['vehicles'], aux_types=['线路'], wage_cost=['cost_wage'], aux_overrides=VEHICLE_AUX_OVERRIDES,
     vehicle_label='营运车辆')
 
 # 3. 道路货物运输
@@ -426,7 +431,7 @@ industry(
      buy('支付外包运费（9%专票）', '支付外包运费', 'outsourced', 9),
      buy('支付维修保养费（13%专票）', '支付车辆维修保养费', 'veh_repair', 13),
      buy('购入车辆（13%专票，挂应付）', '购入车辆', 'vehicle_fa', 13, 'ap')],
-    features=['vehicles'], wage_cost=['cost_wage'], aux_overrides={'disposal': ('车辆', 0)}, vehicle_label='营运车辆')
+    features=['vehicles'], wage_cost=['cost_wage'], aux_overrides=VEHICLE_AUX_OVERRIDES, vehicle_label='营运车辆')
 
 # 4. 居家养老服务
 industry(

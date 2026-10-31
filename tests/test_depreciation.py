@@ -48,16 +48,21 @@ class PlanTest(LedgerTestCase):
         res = closing.run_depreciation(self.conn, 202601)
         self.assertEqual(res['count'], 2)
         self.assertEqual(res['amount'], 197917 + Y(600))
-        lines = self.conn.execute('SELECT account_code, debit, credit FROM lines WHERE voucher_id = ? ORDER BY seq',
+        lines = self.conn.execute('SELECT account_code, aux_id, debit, credit FROM lines WHERE voucher_id = ? ORDER BY seq',
                                   (res['voucher_id'],)).fetchall()
+        # 折旧费用一行合计；累计折旧按车辆辅助核算，每辆车一行
+        aux = dict(self.conn.execute('SELECT id, aux_id FROM vehicles').fetchall())
         self.assertEqual([tuple(r) for r in lines],
-                         [('640101', res['amount'], 0), ('160201', 0, res['amount'])])
+                         [('640101', 0, res['amount'], 0), ('160201', aux[self.a], 0, 197917),
+                          ('160201', aux[self.c], 0, Y(600))])
         self.assertEqual(self.conn.execute('SELECT kind FROM vouchers WHERE id = ?', (res['voucher_id'],)).fetchone()[0],
                          '折旧')
         recs = dict(self.conn.execute('SELECT vehicle_id, amount FROM depr_records WHERE period = 202601').fetchall())
         self.assertEqual(recs, {self.a: 197917, self.c: Y(600)})
         self.assertTrue(closing.depreciation_preview(self.conn, 202601)['done'])
-        self.assertEqual(ledger.leaf_end_balances(self.conn, 202601)[('160201', 0)], -(197917 + Y(600)))
+        bal = ledger.leaf_end_balances(self.conn, 202601)
+        self.assertEqual(bal[('160201', aux[self.a])], -197917)
+        self.assertEqual(sum(v for (c, a), v in bal.items() if c == '160201'), -(197917 + Y(600)))
 
     def test_cannot_run_twice(self):
         closing.run_depreciation(self.conn, 202601)
@@ -97,7 +102,8 @@ class PlanTest(LedgerTestCase):
         res = closing.run_depreciation(self.conn, 202602)
         self.assertEqual(res['amount'], 197917 + Y(2000))
         self.assertEqual(vehicles.recorded_accum(self.conn, self.a), 197917 * 2)
-        self.assertEqual(ledger.leaf_end_balances(self.conn, 202602)[('160201', 0)],
+        bal = ledger.leaf_end_balances(self.conn, 202602)
+        self.assertEqual(sum(v for (c, a), v in bal.items() if c == '160201'),
                          -(197917 * 2 + Y(600) + Y(2000)))
 
 

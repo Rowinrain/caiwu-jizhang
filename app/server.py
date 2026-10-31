@@ -418,6 +418,21 @@ def api_closing_depr(conn, b):
     return C.run_depreciation(conn, b.get('period'))
 
 
+@post('/api/closing/vat')
+def api_closing_vat(conn, b):
+    return C.transfer_vat(conn, b.get('period'))
+
+
+@post('/api/closing/surtax')
+def api_closing_surtax(conn, b):
+    return C.run_surtax(conn, b.get('period'), b.get('rates'))
+
+
+@post('/api/closing/surtax_rates')
+def api_closing_surtax_rates(conn, b):
+    return C.save_surtax_rates(conn, b.get('rates'))
+
+
 @post('/api/closing/carry')
 def api_closing_carry(conn, b):
     return C.carry_forward(conn, b.get('period'))

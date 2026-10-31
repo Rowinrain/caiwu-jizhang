@@ -22,8 +22,11 @@ def T(kind, key, k=1):
 
 
 # ---------------------------------------------------------------- 资产负债表格式
-# (项目代码, 名称, 栏 A/L, 分组, 取数项列表 或 'SUM:...', 为零时隐藏)
+# (项目代码, 名称, 栏 A/L, 分组, 取数项列表 或 'SUM:...', 为零时隐藏, 附注行)
 # 分组用于左右对齐：cur 流动、noncur 非流动、ltotal 负债合计、eq 所有者权益、total 总计
+# 附注行（第 7 项为 True）：只列示构成，不参与任何合计，也没有行次。例如企业会计准则格式下
+# “固定资产”项目按“固定资产原价 − 累计折旧 − 减值准备 ± 固定资产清理”的净额填列，
+# 下面再列出原价、累计折旧、固定资产清理各是多少，方便核对。
 ENT_BS = [
     ('cash', '货币资金', 'A', 'cur', [T('S', 'cash'), T('S', 'bank'), T('S', 'other_money')]),
     ('trading_fa', '交易性金融资产', 'A', 'cur', [T('S', 'trading_fa')]),
@@ -40,10 +43,16 @@ ENT_BS = [
     ('lt_rec', '长期应收款', 'A', 'noncur', [T('S', 'lt_rec')]),
     ('lt_equity', '长期股权投资', 'A', 'noncur', [T('S', 'lt_equity')]),
     ('inv_property', '投资性房地产', 'A', 'noncur', []),
-    ('fixed', '固定资产', 'A', 'noncur', [T('S', 'fa'), T('S', 'accum_depr'), T('S', 'fa_clear')]),
+    ('fixed', '固定资产', 'A', 'noncur', [T('S', 'fa'), T('S', 'accum_depr'), T('S', 'fa_impair'), T('S', 'fa_clear')]),
+    ('fa_cost', '其中：固定资产原价', 'A', 'noncur', [T('S', 'fa')], False, True),
+    ('accum', '减：累计折旧', 'A', 'noncur', [T('S', 'accum_depr', -1)], False, True),
+    ('fa_impair', '减：固定资产减值准备', 'A', 'noncur', [T('S', 'fa_impair', -1)], True, True),
+    ('fa_clear', '固定资产清理', 'A', 'noncur', [T('S', 'fa_clear')], False, True),
     ('cip', '在建工程', 'A', 'noncur', [T('S', 'cip')]),
     ('rou', '使用权资产', 'A', 'noncur', []),
     ('intangible', '无形资产', 'A', 'noncur', [T('S', 'intangible'), T('S', 'amort')]),
+    ('intangible_cost', '其中：无形资产原价', 'A', 'noncur', [T('S', 'intangible')], True, True),
+    ('amort', '减：累计摊销', 'A', 'noncur', [T('S', 'amort', -1)], True, True),
     ('dev', '开发支出', 'A', 'noncur', []),
     ('goodwill', '商誉', 'A', 'noncur', []),
     ('ltpe', '长期待摊费用', 'A', 'noncur', [T('S', 'ltpe')]),
@@ -204,7 +213,7 @@ def report_line_options(standard='enterprise'):
     """科目设置界面里“报表项目”的下拉选项。"""
     f = FORMATS.get(standard, FORMATS['enterprise'])
     bs = [{'key': x[0], 'name': x[1], 'side': ('A' if x[2] == 'A' else ('E' if x[3] == 'eq' else 'L'))}
-          for x in f['bs'] if isinstance(x[4], list)]
+          for x in f['bs'] if isinstance(x[4], list) and not (len(x) > 6 and x[6])]
     is_ = [{'key': it[0], 'name': it[1]} for it in f['is'] if isinstance(it[2], list) and len(it) < 5]
     return {'bs': bs, 'is': is_}
 
@@ -254,7 +263,7 @@ def balance_sheet(conn, pf, pt=None):
         if isinstance(terms, list):
             terms = [(k, keymap[key] if k != 'CAT' else key, f) for k, key, f in terms
                      if k == 'CAT' or (key in keymap and keymap[key] in accts)]
-        items.append([x[0], x[1], x[2], x[3], terms, x[5] if len(x) > 5 else False])
+        items.append([x[0], x[1], x[2], x[3], terms, x[5] if len(x) > 5 else False, x[6] if len(x) > 6 else False])
     by_key = {x[0]: x for x in items}
 
     # 自建一级科目的归属
@@ -262,8 +271,8 @@ def balance_sheet(conn, pf, pt=None):
     for a in accts.values():
         if a['level'] != 1 or a['category'] == '损益' or _covered(a['code'], prefixes):
             continue
-        key = a['report_line'] if a['report_line'] in by_key and isinstance(by_key[a['report_line']][4], list) \
-            else BS_FALLBACK[a['category']]
+        rl = by_key.get(a['report_line'])
+        key = a['report_line'] if rl and isinstance(rl[4], list) and not rl[6] else BS_FALLBACK[a['category']]
         side = by_key[key][2]
         by_key[key][4] = by_key[key][4] + [('S', a['code'], 1 if side == 'A' else -1)]
 
@@ -290,7 +299,7 @@ def balance_sheet(conn, pf, pt=None):
             raise ValueError(kind)
 
         vals = {}
-        for key, name, side, group, terms, hide0 in items:
+        for key, name, side, group, terms, hide0, memo in items:
             if isinstance(terms, list):
                 vals[key] = sum(term(t) for t in terms)
             else:
@@ -300,7 +309,7 @@ def balance_sheet(conn, pf, pt=None):
     end_vals = evaluate(leaf_end_balances(conn, pt))
     begin_vals = evaluate(leaf_begin_balances(conn, pf))
     rows = []
-    for key, name, side, group, terms, hide0 in items:
+    for key, name, side, group, terms, hide0, memo in items:
         if hide0 and not end_vals[key] and not begin_vals[key]:
             continue
         is_total = not isinstance(terms, list)
@@ -308,7 +317,7 @@ def balance_sheet(conn, pf, pt=None):
             formula = '合计：' + '、'.join(('减 ' if f < 0 else '') + by_key[k][1] for k, f in _sum_parts(terms))
         else:
             formula = '；'.join(_bs_term_text(t, {}, accts) for t in terms) or '（本账套没有对应的科目）'
-        rows.append({'key': key, 'name': name, 'side': side, 'group': group, 'total': is_total,
+        rows.append({'key': key, 'name': name, 'side': side, 'group': group, 'total': is_total, 'memo': memo,
                      'end': end_vals[key], 'begin': begin_vals[key], 'formula': formula})
     checks = {
         'end_diff': end_vals['assets'] - end_vals['le_total'],
