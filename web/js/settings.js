@@ -589,12 +589,12 @@ App.pages.update = async (page) => {
       <p class="hint">两种更新方法任选一种。更新前会自动备份所有账套，并把旧版程序保存到 backups/旧版本程序 文件夹；
         <b>data 文件夹里的账套数据不会被改动</b>。更新完成后，点右上角“退出软件”，再重新打开软件即可。</p>
     </div>
+    <div class="card" id="upd-progress" style="max-width:820px;display:none"></div>
     <div class="card" style="max-width:820px">
       <h2>方法一：选择更新包（不需要联网）</h2>
       <p class="hint">拿到新版本的“更新包”（例如“财务记账软件-更新包-v1.5.0.zip”，几百 KB，Windows 和 Mac 通用）后，不用解压，直接在这里选择它。
         也可以选择完整安装包，效果一样。</p>
       <div class="toolbar"><input type="file" id="upd-file" accept=".zip"><button class="btn primary" id="upd-btn">开始更新</button></div>
-      <div id="upd-res"></div>
     </div>
     <div class="card" style="max-width:820px">
       <h2>方法二：在线检查更新</h2>
@@ -604,18 +604,79 @@ App.pages.update = async (page) => {
       <div id="chk-res"></div>
     </div>
     <p class="hint">软件文件夹：${esc(v.root)}<br>数据文件夹：${esc(v.data_dir)}</p>`;
-  const done = (el, r) => {
-    el.innerHTML = `<div class="notice ok">已从 v${esc(r.old_version)} 更新到 v${esc(r.new_version)}，共替换 ${r.files} 个文件。<br>
-      <b>请点右上角“退出软件”，然后重新打开软件。</b>旧版程序已备份到 ${esc(r.code_backup)}。</div>`;
+  // 两种方法共用的进度显示：后台每一步的进度由 /api/update/progress 提供
+  const box = $('#upd-progress', page);
+  const fmtB = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const lock = on => { ['#upd-btn', '#check', '#do-online'].forEach(id => { const b = $(id, page); if (b) b.disabled = on; }); };
+  const render = st => {
+    if (!st || st.state === 'idle') { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const idx = st.stages.findIndex(x => x.key === st.stage);
+    const steps = st.stages.map((x, i) => {
+      let cls = i < idx ? 'done' : i === idx ? 'cur' : '';
+      if (st.state === 'error' && i === idx) cls = 'fail';
+      if (st.state === 'done') cls = i < idx ? 'done' : 'cur';
+      const mark = cls === 'done' ? '✓' : cls === 'fail' ? '✕' : String(i + 1);
+      return `<li class="${cls}"><span class="dot">${mark}</span>${esc(x.name)}</li>`;
+    }).join('');
+    // 进度条：下载/安装等有数量的步骤按实际进度，其余步骤按“第几步”
+    let pct, detail = '';
+    if (st.total > 0 && st.state === 'running') {
+      pct = Math.min(100, Math.floor(st.done * 100 / st.total));
+      if (st.stage === 'download') {
+        detail = `已下载 ${fmtB(st.done)} / ${fmtB(st.total)}${st.speed ? ' · ' + fmtB(st.speed) + '/秒' : ''}`;
+      } else if (st.stage === 'install') detail = `已替换 ${st.done} / ${st.total} 个文件`;
+    } else if (st.stage === 'download' && st.state === 'running') {
+      pct = null; detail = st.done ? `已下载 ${fmtB(st.done)}（服务器没有告知文件大小）` : '正在连接…';
+    } else pct = st.state === 'done' ? 100 : null;
+    const overall = st.state === 'done' ? 100 : Math.round((Math.max(idx, 0) + (pct || 0) / 100) * 100 / (st.stages.length - 1));
+    const bar = pct === null && st.state === 'running'
+      ? `<div class="pbar busy"><i></i></div>` : `<div class="pbar${st.state === 'error' ? ' fail' : ''}"><i style="width:${pct === null ? 0 : pct}%"></i></div>`;
+    let head;
+    if (st.state === 'done') {
+      const r = st.result || {};
+      head = `<div class="notice ok">已从 v${esc(r.old_version)} 更新到 v${esc(r.new_version)}，共替换 ${r.files} 个文件。<br>
+        <b>请点右上角“退出软件”，然后重新打开软件</b>，新版本才会生效。旧版程序已备份到 ${esc(r.code_backup)}。</div>`;
+    } else if (st.state === 'error') {
+      head = `<div class="notice err"><b>更新没有完成：</b>${esc(st.error)}</div>`;
+    } else head = '';
+    box.innerHTML = `<h2>${st.state === 'running' ? '正在更新…' : st.state === 'done' ? '更新完成' : '更新失败'}
+        <span class="hint" style="font-weight:normal;margin-left:8px">总进度 ${st.state === 'error' ? '—' : overall + '%'} · 已用时 ${st.elapsed} 秒</span></h2>
+      <ol class="upd-steps">${steps}</ol>${head}
+      ${st.state === 'running' ? `<div class="upd-msg">${esc(st.message || '')}</div>${bar}
+        <div class="hint">${esc(detail)}${st.source ? `${detail ? ' · ' : ''}下载地址：<b>${esc(st.source)}</b>` : ''}</div>` : ''}
+      ${st.log.length ? `<details ${st.state === 'error' ? 'open' : ''} style="margin-top:8px"><summary class="hint">详细过程（${st.log.length} 条）</summary>
+        <pre class="upd-log">${esc(st.log.join('\n'))}</pre></details>` : ''}`;
   };
+  let timer = null;
+  const poll = async () => {
+    let st;
+    try { st = await api('/api/update/progress'); }
+    catch (e) { if (!page.isConnected) return; timer = setTimeout(poll, 1500); return; }
+    if (!page.isConnected) return; // 已经离开这个页面
+    render(st);
+    lock(st.state === 'running');
+    if (st.state === 'running') timer = setTimeout(poll, 400);
+    else if (st.state === 'done') toast('更新完成，请退出软件后重新打开', 'ok');
+  };
+  const start = async (path, body) => {
+    clearTimeout(timer);
+    lock(true);
+    try { render(await api(path, body)); box.scrollIntoView({ block: 'nearest' }); poll(); }
+    catch (e) { lock(false); render({ state: 'error', stage: '', stages: [], error: e.message, log: [], elapsed: 0 }); }
+  };
+  // 打开这个页面时如果有更新正在进行（例如切换了标签页），接着显示进度
+  api('/api/update/progress').then(st => { if (st.state === 'running') poll(); }).catch(() => {});
+
   $('#upd-btn', page).onclick = async () => {
     const file = $('#upd-file', page).files[0];
     if (!file) return toast('请先选择更新包', 'err');
     if (!await confirmBox('开始更新吗？', '开始更新')) return;
-    const res = $('#upd-res', page);
-    res.innerHTML = '<div class="notice info">正在更新…</div>';
-    try { done(res, await api('/api/update', { data: await fileToB64(file) })); }
-    catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+    box.style.display = '';
+    box.innerHTML = '<h2>正在更新…</h2><div class="upd-msg">正在读取更新包…</div><div class="pbar busy"><i></i></div>';
+    let data;
+    try { data = await fileToB64(file); } catch (e) { box.innerHTML = `<div class="notice err">读取文件失败：${esc(e.message)}</div>`; return; }
+    start('/api/update/start', { data });
   };
   $('#url-save', page).onclick = async () => {
     try { await api('/api/update/settings', { url: $('#upd-url', page).value }); toast('已保存', 'ok'); } catch (e) { toast(e.message, 'err'); }
@@ -623,7 +684,7 @@ App.pages.update = async (page) => {
   $('#check', page).onclick = async () => {
     const res = $('#chk-res', page);
     const url = $('#upd-url', page).value.trim();
-    res.innerHTML = '<div class="notice info">正在检查…</div>';
+    res.innerHTML = '<div class="notice info">正在检查…（GitHub 连不上时会自动改用国内加速地址，可能要等十几秒）</div>';
     try {
       const r = await api('/api/update/check', { url });
       const via = r.source && r.source !== '直连' ? `<div class="hint">（GitHub 直连失败，已通过加速地址 ${esc(r.source)} 获取）</div>` : '';
@@ -631,10 +692,7 @@ App.pages.update = async (page) => {
       res.innerHTML = `<div class="notice info">发现新版本 <b>v${esc(r.latest)}</b>（当前 v${esc(r.current)}）。
         ${r.notes ? `<div style="white-space:pre-wrap;margin-top:6px">${esc(r.notes)}</div>` : ''}${via}</div>
         <button class="btn primary" id="do-online">下载并更新</button>`;
-      $('#do-online', res).onclick = async () => {
-        res.innerHTML = '<div class="notice info">正在下载并更新，请稍候…</div>';
-        try { done(res, await api('/api/update/online', { url })); } catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
-      };
+      $('#do-online', res).onclick = () => start('/api/update/online/start', { url });
     } catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
   };
 };
