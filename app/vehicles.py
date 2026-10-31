@@ -134,7 +134,18 @@ def purchase_draft(conn, vid, tax_rate=13):
         raise AppError('车辆不存在')
     tax = round(v['original'] * tax_rate / 100)
     s = '购入车辆 %s %s' % (v['plate'], v['model'])
-    return {'date': v['purchase_date'], 'lines': [
+    fa_code = acct_key(conn, 'vehicle_fa')
+    notes = ['已按 %g%% 进项税生成购车凭证草稿，请选择供应商（或把贷方改为银行存款）后保存。' % tax_rate]
+    p = period_of_date(v['purchase_date'])
+    if p < start_period(conn):
+        notes.append('注意：这辆车的购置日期早于账套启用期间，属于启用前已有的车辆，'
+                     '一般不用再录购车凭证，而是在“期初余额”中点“从车辆台账带入”。')
+    booked = conn.execute('SELECT COUNT(*), COALESCE(SUM(l.debit - l.credit), 0) FROM lines l '
+                          'WHERE l.account_code = ? AND l.aux_id = ?', (fa_code, v['aux_id'])).fetchone()
+    if booked[0]:
+        notes.append('注意：账上已经有这辆车的固定资产记录（%.2f 元），请先到“凭证查询”确认是否已录过购车凭证，避免重复入账。'
+                     % (booked[1] / 100))
+    return {'date': v['purchase_date'], 'note': ''.join(notes), 'lines': [
         {'summary': s, 'account': acct_key(conn, 'vehicle_fa'), 'aux_id': v['aux_id'], 'debit': v['original'], 'credit': 0},
         {'summary': s, 'account': acct_key(conn, 'vat_in'), 'aux_id': 0, 'debit': tax, 'credit': 0},
         {'summary': s, 'account': acct_key(conn, 'ap'), 'aux_id': 0, 'debit': 0, 'credit': v['original'] + tax},
@@ -243,7 +254,14 @@ def reconcile(conn, p=None):
         book = bal.get((fa_code, v['aux_id']), 0)
         expect = v['original'] if in_use else 0
         if book != expect:
-            rows.append({'plate': v['plate'], 'card': expect, 'book': book, 'diff': book - expect})
+            if not in_use and period_of_date(v['purchase_date']) > p:
+                reason = ('台账上的购置日期是 %s，晚于 %s，所以台账还没把它算进来，但账上已经有这辆车；'
+                          '如果购置日期填错了，请点“修改”改正' % (v['purchase_date'], plabel(p)))
+            elif book == 0:
+                reason = '账上还没有这辆车的原值，可能还没录购车凭证（或期初余额没有带入）'
+            else:
+                reason = '台账原值 %.2f，账上 %.2f' % (expect / 100, book / 100)
+            rows.append({'plate': v['plate'], 'card': expect, 'book': book, 'diff': book - expect, 'reason': reason})
     return {'period': p, 'card_original': total_orig, 'book_original': book_orig,
             'card_accum': total_accum, 'book_accum': book_accum, 'mismatches': rows}
 

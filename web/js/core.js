@@ -642,7 +642,18 @@ async function render() {
   const { panes } = frameEls();
   let t = App.tabs.find(x => x.name === name);
   const hasParams = Object.keys(params).length > 0;
-  if (t && !hasParams) { activateTab(t, false); return; }
+  // 从车辆台账点“购车凭证”/“处置”时会带一张凭证草稿（App.draft）过来：
+  // 即使“凭证录入”标签已经开着，也要重新打开它把草稿填进去，否则看起来就是“跳过去了但什么都没有”。
+  const pendingDraft = name === 'voucher' && !!App.draft;
+  if (t && pendingDraft && t.pane.dataset.dirty === '1') {
+    activateTab(t, false);
+    if (!await confirmBox('“凭证录入”里还有没保存的内容。要放弃这些内容，换成刚生成的凭证草稿吗？', '换成草稿')) {
+      App.draft = null;
+      toast('已保留原来的内容，草稿没有带入', 'warn');
+      return;
+    }
+  }
+  if (t && !hasParams && !pendingDraft) { activateTab(t, false); return; }
   if (!t) {
     if (App.tabs.length >= MAX_TABS) {
       const old = App.tabs.find(x => x !== App.activeTab);
