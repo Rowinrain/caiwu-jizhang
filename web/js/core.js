@@ -618,7 +618,8 @@ function renderChrome() {
   const side = $('#sidebar'), top = $('#topbar');
   if (!App.cid || !App.meta) {
     side.classList.add('hidden');
-    top.innerHTML = `<span class="topbar-company">${APP_NAME}</span><span class="topbar-spacer"></span>
+    top.innerHTML = `<span class="topbar-company">${APP_NAME}</span>
+      ${parseHash().name === 'update' ? '<a href="#/companies" class="btn small">← 返回账套列表</a>' : ''}<span class="topbar-spacer"></span>
       <button class="btn small" data-quit>退出软件</button>`;
     $('[data-quit]', top).onclick = quitApp;
     return;
@@ -653,6 +654,12 @@ async function render() {
   closePicker();
   if (App.silentHash) { App.silentHash = false; return; }
   const { name, params } = parseHash();
+  if (!App.cid && name === 'update') { // 还没选账套时（例如从右下角新版本提示过来），也能打开“软件更新”
+    closeAllTabs();
+    renderChrome();
+    $('#page').innerHTML = '<div class="pane on solo" style="position:relative;flex:1"></div>';
+    return App.pages.update($('#page .solo'), params);
+  }
   if (!App.cid || name === 'companies') {
     App.cid = null;
     closeAllTabs();
@@ -704,7 +711,26 @@ App.start = () => {
     if (e.key === 'F9' && App.cid && App.meta && !document.querySelector('.modal-mask')) { e.preventDefault(); reloadAllTabs(); }
   });
   render();
+  setTimeout(autoCheckUpdate, 3000); // 等界面先打开，再在后台查新版本
 };
+
+/* 打开软件时自动查一次新版本，有就在右下角提示；连不上不提示（设置 → 软件更新 里可以关掉） */
+async function autoCheckUpdate() {
+  let r;
+  try { r = await api('/api/update/auto'); } catch (e) { return; }
+  if (!r || !r.has_update || document.getElementById('update-notice')) return;
+  const box = document.createElement('div');
+  box.id = 'update-notice';
+  box.innerHTML = `<button class="x" title="关闭">✕</button>
+    <div class="un-title">发现新版本 v${esc(r.latest)}</div>
+    <div class="hint">当前是 v${esc(r.current)}${r.notes ? `<br><span class="un-notes">${esc(String(r.notes).split('\n')[0])}</span>` : ''}</div>
+    <div class="un-foot"><button class="btn small" data-later>以后再说</button><button class="btn primary small" data-go>去更新</button></div>`;
+  const close = () => box.remove();
+  $('.x', box).onclick = close;
+  $('[data-later]', box).onclick = close;
+  $('[data-go]', box).onclick = () => { close(); location.hash = '#/update'; };
+  document.body.appendChild(box);
+}
 
 /* ================= 账套选择页 ================= */
 App.pages.companies = async (page) => {

@@ -604,6 +604,8 @@ App.pages.update = async (page) => {
       <div class="toolbar"><input type="text" id="upd-url" value="${esc(us.url || '')}" placeholder="https://…/latest.json" style="width:460px">
         <button class="btn" id="url-save">保存地址</button><button class="btn primary" id="check">检查更新</button></div>
       <div id="chk-res"></div>
+      <div class="toolbar" style="margin-top:8px"><label><input type="checkbox" id="auto-check" ${us.auto_check !== false ? 'checked' : ''}>
+        打开软件时自动检查新版本（有新版本时在右下角提示；连不上网时不提示）</label></div>
     </div>
     <div class="card" style="max-width:820px">
       <h2>打开方式</h2>
@@ -691,6 +693,10 @@ App.pages.update = async (page) => {
     try { await api('/api/desktop/settings', { prefer: r.value }); toast('已保存，下次打开软件时生效', 'ok'); }
     catch (e) { toast(e.message, 'err'); }
   });
+  $('#auto-check', page).onchange = async e => {
+    try { await api('/api/update/settings', { auto_check: e.target.checked }); toast(e.target.checked ? '已打开自动检查，下次打开软件时生效' : '已关闭自动检查', 'ok'); }
+    catch (err) { toast(err.message, 'err'); }
+  };
   $('#url-save', page).onclick = async () => {
     try { await api('/api/update/settings', { url: $('#upd-url', page).value }); toast('已保存', 'ok'); } catch (e) { toast(e.message, 'err'); }
   };
