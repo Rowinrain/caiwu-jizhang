@@ -183,6 +183,11 @@ kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--line-2); bo
 .modal-head .x { margin-left: auto; cursor: pointer; color: var(--ink-3); border: none; background: none; font-size: 18px; }
 .modal-body { padding: 16px 18px; max-height: 66vh; overflow-y: auto; }
 .modal-foot { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+#update-notice { position: fixed; right: 16px; bottom: 16px; z-index: 1500; width: 280px; background: var(--panel); border: 1px solid var(--line-2); border-left: 4px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: 12px 14px; line-height: 1.6; }
+#update-notice .x { position: absolute; top: 6px; right: 8px; border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 14px; }
+#update-notice .un-title { font-weight: bold; color: var(--accent); margin-bottom: 2px; padding-right: 16px; }
+#update-notice .un-notes { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+#update-notice .un-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 #toast-box { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 2000; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast { background: #1f2a37; color: #fff; padding: 10px 18px; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.2); max-width: 640px; white-space: pre-wrap; line-height: 1.6; }
 .toast.err { background: var(--red); }
@@ -239,7 +244,7 @@ pre.fmt { background: #f6f7f9; border: 1px solid var(--line); border-radius: 5px
 @media print {
   @page { size: A4 portrait; margin: 10mm; }
   body { background: #fff; }
-  body.printing #app, #toast-box, .modal-mask { display: none !important; }
+  body.printing #app, #toast-box, #update-notice, .modal-mask { display: none !important; }
   body.printing #print-area { display: block; }
   body:not(.printing) #sidebar, body:not(.printing) #topbar, body:not(.printing) .toolbar, body:not(.printing) .no-print { display: none !important; }
   body:not(.printing) #page { padding: 0; overflow: visible; display: block; }

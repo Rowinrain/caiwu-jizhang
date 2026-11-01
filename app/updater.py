@@ -249,14 +249,58 @@ def get_update_url():
     return _load_settings().get('update_url') or UPDATE_URL
 
 
+def _save_setting(key, value):
+    s = _load_settings()
+    if not isinstance(s, dict):
+        s = {}
+    s[key] = value
+    with open(_settings_path(), 'w', encoding='utf-8') as f:
+        json.dump(s, f, ensure_ascii=False, indent=2)
+
+
 def set_update_url(url):
     url = (url or '').strip()
     if url and not re.match(r'^https?://', url):
         raise AppError('更新地址应以 http:// 或 https:// 开头')
-    s = _load_settings()
-    s['update_url'] = url
-    with open(_settings_path(), 'w', encoding='utf-8') as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
+    _save_setting('update_url', url)
+
+
+# ---------------------------------------------------------------- 启动时自动检查
+# 打开软件时在后台查一次有没有新版本，有就在界面右下角提示。每次打开软件只真正联网查一次
+# （刷新页面、切换账套不会重复查）；连不上（国内网络常见）就当没查过，什么也不提示。
+# 可以在“设置 → 软件更新”里关掉（data/settings.json 的 "auto_check": false）。
+
+def get_auto_check():
+    return _load_settings().get('auto_check') is not False
+
+
+def set_auto_check(on):
+    _save_setting('auto_check', bool(on))
+
+
+_auto = {'done': False, 'result': None}
+_auto_lock = threading.Lock()
+
+
+def auto_check():
+    """返回 {'enabled': bool, 'has_update': bool, 'latest': …, 'current': …, 'notes': …}。不会报错。"""
+    if not get_auto_check():
+        return {'enabled': False, 'has_update': False, 'current': VERSION}
+    with _auto_lock:  # 同时来几个请求时只查一次，后来的等前一个的结果
+        if not _auto['done']:
+            r = None
+            try:
+                url = get_update_url()
+                if url:
+                    r = check_online(url)
+            except Exception:
+                r = None
+            _auto['result'], _auto['done'] = r, True
+        r = _auto['result']
+    if not r or not r.get('has_update'):
+        return {'enabled': True, 'has_update': False, 'current': VERSION}
+    return {'enabled': True, 'has_update': True, 'current': VERSION, 'latest': r['latest'],
+            'notes': r.get('notes', '')}
 
 
 def _vtuple(v):

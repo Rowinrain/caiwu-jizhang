@@ -128,13 +128,22 @@ def api_update_progress(conn, q):
 
 @get('/api/update/settings', needs_company=False)
 def api_update_settings(conn, q):
-    return {'url': updater.get_update_url(), 'version': VERSION}
+    return {'url': updater.get_update_url(), 'version': VERSION, 'auto_check': updater.get_auto_check()}
 
 
 @post('/api/update/settings', needs_company=False)
 def api_update_settings_save(conn, b):
-    updater.set_update_url(b.get('url') or '')
+    if 'url' in b:
+        updater.set_update_url(b.get('url') or '')
+    if 'auto_check' in b:
+        updater.set_auto_check(b.get('auto_check'))
     return {'ok': True}
+
+
+@get('/api/update/auto', needs_company=False)
+def api_update_auto(conn, q):
+    """打开软件时的自动检查（每次启动只联网一次，失败不报错）。"""
+    return updater.auto_check()
 
 
 @post('/api/update/check', needs_company=False)
